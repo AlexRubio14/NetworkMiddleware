@@ -1,11 +1,9 @@
-# Buscamos SFML específicamente para este módulo
-find_package(SFML 2.5 COMPONENTS network REQUIRED)
+find_package(SFML COMPONENTS network REQUIRED)
 
-# Definimos la librería de transporte
+# Solo una vez este comando:
 add_library(MiddlewareTransport STATIC 
     SFMLTransport.cpp 
     SFMLTransport.h
 )
 
-# Enlazamos con SFML y el Shared
 target_link_libraries(MiddlewareTransport PUBLIC sfml-network MiddlewareShared)
