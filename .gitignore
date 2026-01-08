@@ -416,3 +416,26 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# --- Middleware Specific ---
+build/
+out/
+bin/
+*.bin
+*.exe
+
+# --- CMake ---
+CMakeCache.txt
+CMakeFiles/
+CMakeSettings.json
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# --- Unreal Engine ---
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.ue/
+*.pga
