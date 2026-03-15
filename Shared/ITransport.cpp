@@ -3,15 +3,6 @@
 #include <cstdint>
 #include <string>
 
-namespace Middleware {
-    // Interfaz pura: define QUÉ se puede hacer, pero no CÓMO
-    class ITransport {
-    public:
-        virtual ~ITransport() = default;
+namespace NetworkMiddleware::Shared {
 
-        virtual bool Initialize(uint16_t port) = 0;
-        virtual void Send(const std::vector<uint8_t>& data, const std::string& address, uint16_t port) = 0;
-        virtual bool Receive(std::vector<uint8_t>& outData, std::string& outAddress, uint16_t& outPort) = 0;
-        virtual void Close() = 0;
-    };
 }

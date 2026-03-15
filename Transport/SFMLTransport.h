@@ -2,15 +2,15 @@
 #include "../Shared/ITransport.h"
 #include <SFML/Network.hpp>
 
-namespace Middleware {
-    class SFMLTransport : public ITransport {
+namespace NetworkMiddleware::Transport {
+    class SFMLTransport : public Shared::ITransport {
     private:
         sf::UdpSocket m_socket; 
 
     public:
         bool Initialize(uint16_t port) override;
-        void Send(const std::vector<uint8_t>& data, const std::string& address, uint16_t port) override;
-        bool Receive(std::vector<uint8_t>& outData, std::string& outAddress, uint16_t& outPort) override;
+        bool Receive(std::vector<uint8_t>& buffer, Shared::EndPoint& sender) override;
+        void Send(const std::vector<uint8_t>& buffer, const Shared::EndPoint& recipient) override;
         void Close() override;
     };
 }

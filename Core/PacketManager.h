@@ -1,5 +1,5 @@
 #pragma once
-namespace Middleware {
+namespace NetworkMiddleware::Core {
     class PacketManager {
     public:
         void Initialize();

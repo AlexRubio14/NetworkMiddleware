@@ -1,9 +1,14 @@
 find_package(SFML COMPONENTS network REQUIRED)
 
-# Solo una vez este comando:
-add_library(MiddlewareTransport STATIC 
-    SFMLTransport.cpp 
-    SFMLTransport.h
+add_library(MiddlewareTransport STATIC
+        SFMLTransport.cpp
+        SFMLTransport.h
+        TransportFactory.h
+        TransportFactory.cpp
 )
 
-target_link_libraries(MiddlewareTransport PUBLIC sfml-network MiddlewareShared)
+target_link_libraries(MiddlewareTransport
+        PUBLIC MiddlewareShared
+        PRIVATE sfml-network
+)
+target_include_directories(MiddlewareTransport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

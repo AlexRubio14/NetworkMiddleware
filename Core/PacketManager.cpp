@@ -1,6 +1,10 @@
 #include "PacketManager.h"
 #include <iostream>
 
-void Middleware::PacketManager::Initialize() {
-    std::cout << "[Core] Inicializado" << std::endl;
+namespace NetworkMiddleware::Core {
+    void PacketManager::Initialize() {
+        std::cout << "[Core] Inicializado" << std::endl;
+    }
 }
+
+
