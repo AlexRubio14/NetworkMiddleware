@@ -1,5 +1,6 @@
 ﻿
 #include "NetworkManager.h"
+#include "Log/Logger.h"
 
 namespace NetworkMiddleware::Core {
     NetworkManager::NetworkManager(std::shared_ptr<Shared::ITransport> transport)
@@ -12,13 +13,15 @@ namespace NetworkMiddleware::Core {
 
     void NetworkManager::Update()
     {
-        std::vector<uint8_t> buffer;
+        auto buffer = std::make_shared<std::vector<uint8_t>>();;
         Shared::EndPoint sender;
 
-        if (m_transport->Receive(buffer, sender))
+        if (m_transport->Receive(*buffer, sender))
         {
+            Shared::Logger::LogPacket(Shared::LogChannel::Core, buffer);
+
             if (m_onDataReceived)
-                m_onDataReceived(buffer, sender);
+                m_onDataReceived(*buffer, sender);
         }
     }
 }
