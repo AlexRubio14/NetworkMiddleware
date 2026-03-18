@@ -20,5 +20,7 @@
         std::vector<uint8_t> GetCompressedData() const;
 
         const std::vector<uint8_t>& GetRawBuffer() const;
+
+        size_t GetBitCount() const { return m_bitHead; }
     };
  }

@@ -1,99 +1,50 @@
 #include <iostream>
-#include <thread>
-#include <chrono>
+#include <cassert>
 
-// SHARED
-#include "Log/Logger.h"
-#include "Serialization/BitWriter.h"
-#include "Serialization/BitReader.h"
-#include "TransportType.h"
+// 1. Correct paths based on our architecture
+#include "../Shared/Gameplay/ViegoEntity.h"
+#include "../Shared/Data/Network/HeroSerializer.h"
+#include "Data/Network/NetworkOptimizer.h"
 
-// TRANSPORT & CORE & BRAIN
-#include "../Transport/TransportFactory.h"
-#include "../Core/NetworkManager.h"
-#include "../Brain/BrainManager.h"
-#include "../Brain/NeuralProcessor.h"
-#include "../Brain/BehaviorTree.h"
 
-namespace NM = NetworkMiddleware;
+// 2. Use the correct namespaces
 using namespace NetworkMiddleware::Shared;
 
-int main()
-{
-    Logger::Start();
+int main() {
+    std::cout << "--- Testing Viego Network Synchronization ---" << std::endl;
 
-    Logger::Log
-    (
-        LogLevel::Info,
-        LogChannel::General,
-        "Starting Middleware Server..."
-    );
+    // Validació d'Endianness
+    if (Network::NetworkOptimizer::IsLittleEndian()) {
+        std::cout << "[System] Endianness: Little-Endian (Match Windows/Linux)" << std::endl;
+    } else {
+        std::cout << "[System] Endianness: Big-Endian (Swap required!)" << std::endl;
+    }
 
-    // --- PHASE 2 TEST: Bit-packing Cycle ---
+    // We must use the specific namespaces for the classes
+    // serverViego is Gameplay::ViegoEntity
+    Gameplay::ViegoEntity serverViego(101);
+
+    serverViego.SetPosition(12.5f, -45.8f);
+    serverViego.TakeDamage(150.0f);
+
+    // 3. Ensure we use the Network namespace for writers/readers
     BitWriter writer;
-    uint32_t originalHealth = 2000;
+    serverViego.Serialize(writer);
 
-    writer.WriteBits(originalHealth, 11);
+    std::cout << "[Server] Bits written: " << writer.GetBitCount() << std::endl;
 
-    // Get ONLY compressed bytes (should be 2 bytes)
-    auto compressedData = writer.GetCompressedData();
-    auto packetData = std::make_shared<std::vector<uint8_t>>(compressedData);
+    // Transmission simulation
+    BitReader reader(writer.GetCompressedData(), writer.GetBitCount());
 
-    Logger::LogPacket
-    (
-        LogChannel::Core,
-        packetData
-    );
+    Gameplay::ViegoEntity clientViego(101);
 
-    // Read back test
-    BitReader reader(compressedData);
-    uint32_t decodedHealth = reader.ReadBits(11);
+    // Verification before sync
+    assert(clientViego.GetX() != serverViego.GetX());
 
-    if (decodedHealth == originalHealth)
-    {
-        Logger::Log
-        (
-            LogLevel::Info,
-            LogChannel::General,
-            "SERIALIZATION SUCCESS: Decoded 2000 correctly!"
-        );
-    }
-    else
-    {
-        Logger::Log
-        (
-            LogLevel::Error,
-            LogChannel::General,
-            "SERIALIZATION ERROR: Data mismatch!"
-        );
-    }
-    // --- END TEST ---
+    clientViego.Unserialize(reader);
 
-    auto transport = NM::Transport::TransportFactory::Create(TransportType::SFML);
-    if (!transport->Initialize(8888))
-    {
-        return -1;
-    }
+    std::cout << "--- Synchronization Results ---" << std::endl;
+    std::cout << "Position X -> Server: " << serverViego.GetX() << " | Client: " << clientViego.GetX() << std::endl;
 
-    NM::Core::NetworkManager networkManager(transport);
-    auto brain = std::make_shared<NM::Brain::BrainManager>
-    (
-        std::make_unique<NM::Brain::NeuralProcessor>(),
-        std::make_unique<NM::Brain::BehaviorTree>()
-    );
-
-    networkManager.SetDataCallback([&](const auto& data, const auto& sender)
-    {
-        std::string decision = brain->DecideAction(data);
-        std::cout << "[IA] Received by " << sender.ToString() << " | Decision: " << decision << std::endl;
-    });
-
-    while (true)
-    {
-        networkManager.Update();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    Logger::Stop();
     return 0;
 }

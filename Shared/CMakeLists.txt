@@ -15,6 +15,18 @@ add_library(MiddlewareShared STATIC
         Serialization/BitWriter.cpp
         Serialization/BitReader.h
         Serialization/BitReader.cpp
+        INetworkable.h
+        Data/HeroState.h
+        Gameplay/IHero.h
+        Gameplay/BaseHero.cpp
+        Gameplay/BaseHero.h
+        Gameplay/HeroDirtyBits.h
+        Data/Network/NetworkOptimizer.cpp
+        Data/Network/NetworkOptimizer.h
+        Data/Network/HeroSerializer.cpp
+        Data/Network/HeroSerializer.h
+        Gameplay/ViegoEntity.cpp
+        Gameplay/ViegoEntity.h
 )
 
 target_include_directories(MiddlewareShared PUBLIC

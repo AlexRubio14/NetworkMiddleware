@@ -1,7 +1,9 @@
 ﻿#include "BitWriter.h"
 #include <algorithm>
 
- namespace NetworkMiddleware::Shared {
+#include "Data/Network/NetworkOptimizer.h"
+
+namespace NetworkMiddleware::Shared {
 
      BitWriter::BitWriter(size_t initialCapacity)
          : m_bitHead(0)
@@ -14,27 +16,33 @@
 
      void BitWriter::WriteBits(uint32_t value, uint32_t numBits)
      {
-         // Safety mask to avoid overflow
-         value &= (numBits == 32) ? 0xFFFFFFFF : (1U << numBits) - 1;
+         if (numBits < 32)
+             value &= (1U << numBits) - 1;
 
-         for (uint32_t i = 0; i < numBits; ++i)
+         while (numBits > 0)
          {
-             size_t byteIndex = m_bitHead / 8;
-             size_t bitOffset = m_bitHead % 8;
+             size_t byteIndex = m_bitHead >> 3;   // Equivalent a / 8
+             size_t bitOffset = m_bitHead & 7;    // Equivalent a % 8
 
-             // Grow the buffer if we reach a new byte boundary
+             // Grow buffer
              if (byteIndex >= m_buffer.size())
-             {
                  m_buffer.push_back(0);
-             }
 
-             // Set the bit if it's 1 in the input value
-             if (value & (1U << i))
-             {
-                 m_buffer[byteIndex] |= (1U << bitOffset);
-             }
+             // How many bits can we fit in the current byte?
+             uint32_t bitsFreeInByte = 8 - (uint32_t)bitOffset;
+             uint32_t bitsToWrite = (numBits < bitsFreeInByte) ? numBits : bitsFreeInByte;
 
-             m_bitHead++;
+             // Create a mask for the bits we are about to write
+             uint32_t mask = (1U << bitsToWrite) - 1;
+             uint32_t bitsToPutIn = value & mask;
+
+             // "Pour" the bits into the byte at the correct offset
+             m_buffer[byteIndex] |= (static_cast<uint8_t>(bitsToPutIn) << bitOffset);
+
+             // Advance the state
+             value >>= bitsToWrite;
+             numBits -= bitsToWrite;
+             m_bitHead += bitsToWrite;
          }
      }
 
