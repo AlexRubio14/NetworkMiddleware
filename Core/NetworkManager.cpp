@@ -18,6 +18,11 @@ namespace NetworkMiddleware::Core {
 
     // -------------------------------------------------------------------------
     // Update — tick principal del servidor
+    // Modelo de threading: Update() es llamado exclusivamente desde el tick loop
+    // principal (hilo único). GetEstablishedCount()/GetPendingCount() deben
+    // consultarse desde el mismo hilo. Si en el futuro se introduce un hilo de
+    // red separado, añadir std::mutex sobre m_pendingClients, m_establishedClients,
+    // m_nextNetworkID y m_rng.
     // -------------------------------------------------------------------------
     void NetworkManager::Update() {
         // 1. Expirar handshakes sin respuesta (> 5 segundos)
@@ -62,11 +67,9 @@ namespace NetworkMiddleware::Core {
                 break;
 
             default:
-                // Paquete de juego: solo se acepta de clientes establecidos
-                if (m_establishedClients.contains(sender)) {
-                    auto& client = m_establishedClients.at(sender);
-                    client.seqContext.RecordReceived(header.sequence);
-
+                // Fix CodeRabbit: un solo find() en lugar de contains() + at()
+                if (auto it = m_establishedClients.find(sender); it != m_establishedClients.end()) {
+                    it->second.seqContext.RecordReceived(header.sequence);
                     if (m_onDataReceived)
                         m_onDataReceived(header, reader, sender);
                 } else {
@@ -93,14 +96,20 @@ namespace NetworkMiddleware::Core {
 
     // -------------------------------------------------------------------------
     // HandleConnectionRequest — paso 1 del handshake
+    //
+    // Fix CodeRabbit (bug crítico): el NetworkID se reserva aquí con m_nextNetworkID++.
+    // Los retries del mismo cliente reutilizan el ID ya reservado (no desperdician IDs)
+    // y renuevan el salt para reiniciar el timer de 5 segundos.
     // -------------------------------------------------------------------------
     void NetworkManager::HandleConnectionRequest(const Shared::EndPoint& sender) {
+        // Ignorar si ya está establecido
         if (m_establishedClients.contains(sender)) {
             Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
                 std::format("ConnectionRequest de cliente ya establecido: {} — ignorado", sender.ToString()));
             return;
         }
 
+        // Rechazar si el servidor está lleno
         if (m_establishedClients.size() >= kMaxClients) {
             Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
                 std::format("Servidor lleno ({} clientes). Rechazando: {}", kMaxClients, sender.ToString()));
@@ -109,16 +118,35 @@ namespace NetworkMiddleware::Core {
         }
 
         const uint64_t salt = m_rng();
-        m_pendingClients.insert_or_assign(sender, RemoteClient(sender, m_nextNetworkID, salt));
+
+        // Si el cliente ya estaba en pendientes (retry), reutiliza su NetworkID reservado
+        // y solo renueva el salt + timer. No se desperdicia ningún ID.
+        if (auto it = m_pendingClients.find(sender); it != m_pendingClients.end()) {
+            it->second.challengeSalt   = salt;
+            it->second.challengeSentAt = std::chrono::steady_clock::now();
+            Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                std::format("ConnectionRequest retry de {} (NetworkID={} reservado). Renovando Challenge.",
+                    sender.ToString(), it->second.networkID));
+            SendChallenge(sender, salt);
+            return;
+        }
+
+        // Primera vez: reservar NetworkID incrementando el contador
+        const uint16_t reservedID = m_nextNetworkID++;
+        m_pendingClients.emplace(sender, RemoteClient(sender, reservedID, salt));
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-            std::format("ConnectionRequest de {}. Enviando Challenge (salt={:#x})", sender.ToString(), salt));
+            std::format("ConnectionRequest de {}. NetworkID={} reservado. Enviando Challenge.",
+                sender.ToString(), reservedID));
 
         SendChallenge(sender, salt);
     }
 
     // -------------------------------------------------------------------------
     // HandleChallengeResponse — paso 3 del handshake
+    //
+    // Fix CodeRabbit (bug crítico): usa pending.networkID (reservado en paso 1)
+    // en lugar de volver a incrementar m_nextNetworkID.
     // -------------------------------------------------------------------------
     void NetworkManager::HandleChallengeResponse(Shared::BitReader& reader, const Shared::EndPoint& sender) {
         auto it = m_pendingClients.find(sender);
@@ -140,7 +168,8 @@ namespace NetworkMiddleware::Core {
             return;
         }
 
-        const uint16_t assignedID = m_nextNetworkID++;
+        // Usar el NetworkID que se reservó en HandleConnectionRequest (no incrementar de nuevo)
+        const uint16_t assignedID = pending.networkID;
         m_establishedClients.emplace(sender, RemoteClient(sender, assignedID, 0));
         m_pendingClients.erase(it);
 
