@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  test:
+    name: Build & Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            coverage: true
+          - os: windows-latest
+            coverage: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Ubuntu: install SFML + lcov ──────────────────────────────────────────
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsfml-dev lcov
+
+      # ── Configure ────────────────────────────────────────────────────────────
+      - name: Configure CMake (Ubuntu + coverage)
+        if: runner.os == 'Linux'
+        run: >
+          cmake -B build
+          -DBUILD_TESTS=ON
+          -DENABLE_COVERAGE=ON
+          -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -B build
+          -DBUILD_TESTS=ON
+          -DCMAKE_BUILD_TYPE=Debug
+
+      # ── Build ─────────────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config Debug
+
+      # ── Test ──────────────────────────────────────────────────────────────────
+      - name: Run Tests
+        run: ctest --test-dir build --build-config Debug --output-on-failure
+
+      # ── Coverage (Ubuntu only) ────────────────────────────────────────────────
+      - name: Generate coverage report
+        if: matrix.coverage
+        run: |
+          lcov --capture --directory build --output-file coverage.info
+          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/googletest-src/*' --output-file coverage.info
+          lcov --list coverage.info
+
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.info
+          fail_ci_if_error: false
