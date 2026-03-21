@@ -7,6 +7,20 @@
 
 namespace NetworkMiddleware::Core {
 
+    // Estado de estimación de RTT por cliente (P-3.4).
+    // sentTimes mapea cada global sequence al instante en que fue enviado.
+    // Cuando llega un ACK para esa sequence se calcula el RTT bruto y se actualiza el EMA.
+    // Entries más viejas de 2 segundos se purgan en Update() para evitar crecimiento indefinido.
+    struct RTTContext {
+        float    rttEMA      = 100.0f;  // RTT suavizado en ms (EMA, α=0.1). Inicializado a 100ms.
+        int      sampleCount = 0;       // Número de muestras de RTT tomadas
+        float    clockOffset = 0.0f;    // ServerTime - (ClientTime + RTT/2) en ms. Requiere
+                                        // que el cliente Unreal escriba su timestamp en el header.
+
+        // seq global → instante de envío por parte de este servidor.
+        std::map<uint16_t, std::chrono::steady_clock::time_point> sentTimes;
+    };
+
     // Paquete Reliable Ordered almacenado fuera de orden, esperando que lleguen los anteriores.
     // Guarda el header completo (timestamp incluido) para que la entrega al game layer sea
     // idéntica a la de un paquete llegado en orden (necesario para interpolación en Fase 6).
@@ -68,6 +82,17 @@ namespace NetworkMiddleware::Core {
         // Detección de duplicados: false hasta que llega el primer paquete de juego.
         // Evita que la comparación con remoteAck=0 del estado inicial genere falsos positivos.
         bool                                      m_seqInitialized = false;
+
+        // --- P-3.4 Clock Sync & RTT ---
+
+        // Estimación de RTT y cálculo de offset de reloj.
+        RTTContext                                m_rtt;
+
+        // Filtro de paquetes Unreliable fuera de orden (Snapshot, Input, Heartbeat).
+        // Solo se entrega al game layer el paquete con la sequence más alta vista hasta ahora.
+        // Usa comparación int16_t modular para manejar wrap-around en 65535.
+        uint16_t                                  m_lastProcessedSeq            = 0;
+        bool                                      m_lastProcessedSeqInitialized = false;
     };
 
 }

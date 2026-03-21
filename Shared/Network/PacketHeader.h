@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <chrono>
 #include "PacketTypes.h"
 #include "../Serialization/BitWriter.h"
 #include "../Serialization/BitReader.h"
@@ -21,7 +22,7 @@ namespace NetworkMiddleware::Shared {
         void AdvanceLocal();
     };
 
-    // Header de 100 bits que precede a todo paquete UDP.
+    // Header de 104 bits que precede a todo paquete UDP.
     // Los 4 bits de relleno hasta completar 13 bytes los gestiona GetCompressedData().
     //
     // Wire format (LSB-first, igual que BitWriter):
@@ -35,8 +36,8 @@ namespace NetworkMiddleware::Shared {
         uint8_t  flags     = 0;                       // PacketFlags (4 bits en wire)
         uint32_t timestamp = 0;                       // Timestamp del servidor en ms (Clock Sync Fase 3.4)
 
-        // 100 bits totales. GetCompressedData() rellena los 4 bits restantes hasta completar 13 bytes.
-        static constexpr uint32_t kBitCount  = 16 + 16 + 32 + 4 + 4 + 32;  // = 100 bits
+        // 104 bits totales = 16+16+32+4+4+32. kByteCount = 13 bytes (104/8, sin relleno).
+        static constexpr uint32_t kBitCount  = 16 + 16 + 32 + 4 + 4 + 32;  // = 104 bits
         static constexpr uint32_t kByteCount = (kBitCount + 7) / 8;         // = 13 bytes
 
         // Devuelve true si 'seq' está confirmado por el ack + ack_bits de este header.
@@ -47,6 +48,17 @@ namespace NetworkMiddleware::Shared {
             if (diff > 0 && diff <= 32)
                 return (ack_bits >> (diff - 1)) & 1u;          // En la ventana del bitmask
             return false;
+        }
+
+        // Devuelve el tiempo actual en milisegundos, truncado a 32 bits.
+        // Ambos lados (servidor y cliente Unreal) deben usar este método para
+        // escribir header.timestamp. El clockOffset de P-3.4 calcula la diferencia.
+        static uint32_t CurrentTimeMs() {
+            return static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()
+                ).count()
+            );
         }
 
         void Write(BitWriter& writer) const;

@@ -95,9 +95,35 @@ namespace NetworkMiddleware::Core {
                             std::format("Duplicado descartado: seq={} de {}", header.sequence, sender.ToString()));
                     } else if (type == Shared::PacketType::Reliable) {
                         HandleReliableOrdered(reader, client, sender, buffer->size() * 8, header);
-                    } else if (m_onDataReceived) {
-                        m_onDataReceived(header, reader, sender);
+                    } else {
+                        // Filtro de paquetes Unreliable fuera de orden (P-3.4).
+                        // Solo Snapshot, Input y Heartbeat pasan por esta barrera.
+                        // Reliable y ReliableUnordered ya tienen su propio mecanismo de garantía.
+                        const bool isUnreliableChannel =
+                            (type == Shared::PacketType::Snapshot  ||
+                             type == Shared::PacketType::Input      ||
+                             type == Shared::PacketType::Heartbeat);
+
+                        if (isUnreliableChannel && client.m_lastProcessedSeqInitialized) {
+                            const int16_t diff = static_cast<int16_t>(
+                                header.sequence - client.m_lastProcessedSeq);
+                            if (diff <= 0) {
+                                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                                    std::format("Unreliable fuera de orden descartado: seq={} lastProcessed={} de {}",
+                                        header.sequence, client.m_lastProcessedSeq, sender.ToString()));
+                                break;
+                            }
+                        }
+
+                        if (isUnreliableChannel) {
+                            client.m_lastProcessedSeq            = header.sequence;
+                            client.m_lastProcessedSeqInitialized = true;
+                        }
+
+                        if (m_onDataReceived)
+                            m_onDataReceived(header, reader, sender);
                     }
+
                 } else {
                     Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
                         std::format("Paquete de cliente no autenticado: {}", sender.ToString()));
@@ -267,8 +293,9 @@ namespace NetworkMiddleware::Core {
         header.sequence = usedSeq;
         header.ack      = client.seqContext.remoteAck;
         header.ack_bits = client.seqContext.ackBits;
-        header.type     = static_cast<uint8_t>(channel);
-        header.flags    = 0;
+        header.type      = static_cast<uint8_t>(channel);
+        header.flags     = 0;
+        header.timestamp = Shared::PacketHeader::CurrentTimeMs();
         header.Write(writer);
 
         // Reliable Ordered: prepend el número de secuencia de canal (16 bits)
@@ -296,6 +323,10 @@ namespace NetworkMiddleware::Core {
             client.m_reliableSents.emplace(usedSeq, std::move(pending));
         }
 
+        // Registrar el instante de envío para RTT sampling (P-3.4).
+        // usedSeq capturado antes de AdvanceLocal(), que es el seq escrito en el header.
+        client.m_rtt.sentTimes[usedSeq] = std::chrono::steady_clock::now();
+
         client.seqContext.AdvanceLocal();
 
         if (channel == Shared::PacketType::Reliable)
@@ -319,8 +350,14 @@ namespace NetworkMiddleware::Core {
             bool shouldDisconnect = false;
             const auto now = std::chrono::steady_clock::now();
 
+            // Intervalo adaptativo basado en RTT (P-3.4): RTT×1.5, mínimo 30ms.
+            // Hasta tener muestras reales, rttEMA=100ms → intervalo inicial 150ms.
+            const auto dynamicInterval = std::chrono::milliseconds(
+                std::max(30LL, static_cast<long long>(client.m_rtt.rttEMA * 1.5f))
+            );
+
             for (auto& [seq, pending] : client.m_reliableSents) {
-                if (now - pending.lastSentTime < kResendInterval)
+                if (now - pending.lastSentTime < dynamicInterval)
                     continue;
 
                 if (pending.retryCount >= kMaxRetries) {
@@ -353,6 +390,13 @@ namespace NetworkMiddleware::Core {
 
             if (shouldDisconnect)
                 toDisconnect.push_back(endpoint);
+
+            // Limpiar sentTimes con más de 2 segundos (P-3.4 hygiene).
+            // Ejecutado una vez por Update() por cliente, no por paquete recibido.
+            const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+            std::erase_if(client.m_rtt.sentTimes, [&cutoff](const auto& e) {
+                return e.second < cutoff;
+            });
         }
 
         for (const auto& ep : toDisconnect)
@@ -364,6 +408,30 @@ namespace NetworkMiddleware::Core {
     // header recibido (usando el ack + ack_bits bitmask de P-3.1).
     // -------------------------------------------------------------------------
     void NetworkManager::ProcessAcks(RemoteClient& client, const Shared::PacketHeader& header) {
+        // RTT sampling: el campo ack del header remoto indica cuál fue el último paquete
+        // que el cliente confirmó. Si tenemos el instante de envío, calculamos el RTT bruto
+        // y actualizamos el EMA (α=0.1). También derivamos el clock offset aproximado.
+        const auto sentIt = client.m_rtt.sentTimes.find(header.ack);
+        if (sentIt != client.m_rtt.sentTimes.end()) {
+            const float rawRTT = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - sentIt->second).count();
+
+            constexpr float kAlpha = 0.1f;
+            client.m_rtt.rttEMA = kAlpha * rawRTT + (1.0f - kAlpha) * client.m_rtt.rttEMA;
+            ++client.m_rtt.sampleCount;
+
+            // clockOffset = ServerNow - (ClientTime + RTT/2).
+            // Solo se actualiza si el cliente ha escrito un timestamp real (≠ 0).
+            // Hasta que el cliente Unreal implemente CurrentTimeMs(), clockOffset permanece 0.
+            if (header.timestamp != 0) {
+                const float serverNow = static_cast<float>(Shared::PacketHeader::CurrentTimeMs());
+                client.m_rtt.clockOffset =
+                    serverNow - (static_cast<float>(header.timestamp) + client.m_rtt.rttEMA / 2.0f);
+            }
+
+            client.m_rtt.sentTimes.erase(sentIt);
+        }
+
         std::erase_if(client.m_reliableSents, [&header](const auto& entry) {
             return header.IsAcked(entry.first);
         });
@@ -443,6 +511,24 @@ namespace NetworkMiddleware::Core {
             client.m_reliableReceiveBuffer.erase(it);
             ++client.m_nextExpectedReliableSeq;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // GetClientNetworkStats — expone RTT y clock offset al módulo Brain (P-3.4).
+    // -------------------------------------------------------------------------
+    std::optional<ClientNetworkStats> NetworkManager::GetClientNetworkStats(
+        const Shared::EndPoint& ep) const
+    {
+        const auto it = m_establishedClients.find(ep);
+        if (it == m_establishedClients.end())
+            return std::nullopt;
+
+        const RTTContext& rtt = it->second.m_rtt;
+        return ClientNetworkStats{
+            .rtt         = rtt.rttEMA,
+            .clockOffset = rtt.clockOffset,
+            .sampleCount = rtt.sampleCount,
+        };
     }
 
 }
