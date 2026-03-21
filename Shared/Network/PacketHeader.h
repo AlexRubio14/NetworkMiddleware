@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <chrono>
 #include "PacketTypes.h"
 #include "../Serialization/BitWriter.h"
 #include "../Serialization/BitReader.h"
@@ -47,6 +48,17 @@ namespace NetworkMiddleware::Shared {
             if (diff > 0 && diff <= 32)
                 return (ack_bits >> (diff - 1)) & 1u;          // En la ventana del bitmask
             return false;
+        }
+
+        // Devuelve el tiempo actual en milisegundos, truncado a 32 bits.
+        // Ambos lados (servidor y cliente Unreal) deben usar este método para
+        // escribir header.timestamp. El clockOffset de P-3.4 calcula la diferencia.
+        static uint32_t CurrentTimeMs() {
+            return static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()
+                ).count()
+            );
         }
 
         void Write(BitWriter& writer) const;

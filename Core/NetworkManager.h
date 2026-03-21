@@ -7,11 +7,19 @@
 #include <memory>
 #include <functional>
 #include <map>
+#include <optional>
 #include <vector>
 #include <random>
 #include <chrono>
 
 namespace NetworkMiddleware::Core {
+
+    // Métricas de red por cliente, expuestas al módulo Brain (P-3.4).
+    struct ClientNetworkStats {
+        float    rtt         = 0.0f;  // RTT suavizado en ms (EMA, α=0.1)
+        float    clockOffset = 0.0f;  // ServerNow - (ClientTime + RTT/2) en ms
+        int      sampleCount = 0;     // Número de muestras de RTT tomadas
+    };
 
     // Callback para paquetes de juego de clientes ya establecidos.
     // El BitReader está posicionado en el bit 100 (inicio del payload).
@@ -83,6 +91,10 @@ namespace NetworkMiddleware::Core {
                   Shared::PacketType channel);
 
         void Update();
+
+        // Devuelve las métricas de red del cliente (para Brain, P-3.4).
+        // Retorna nullopt si el endpoint no corresponde a un cliente establecido.
+        std::optional<ClientNetworkStats> GetClientNetworkStats(const Shared::EndPoint& ep) const;
 
         size_t GetEstablishedCount() const { return m_establishedClients.size(); }
         size_t GetPendingCount()     const { return m_pendingClients.size(); }
