@@ -11,6 +11,13 @@ namespace NetworkMiddleware::Shared {
         Reliable          = 0x3,  // Compras, level-up, habilidades lanzadas (Reliable Ordered)
         ReliableUnordered = 0x4,  // Muertes, chat (Reliable Unordered)
         Heartbeat         = 0x5,  // Keepalive de conexión
+
+        // Handshake P-3.2
+        ConnectionRequest  = 0x6,  // Cliente → Servidor: solicitud de conexión
+        ConnectionChallenge= 0x7,  // Servidor → Cliente: salt aleatorio
+        ChallengeResponse  = 0x8,  // Cliente → Servidor: eco del salt
+        ConnectionAccepted = 0x9,  // Servidor → Cliente: NetworkID asignado (Welcome)
+        ConnectionDenied   = 0xA,  // Servidor → Cliente: rechazo
     };
 
     // Flags de control del paquete — 4 bits en el wire format.

@@ -8,6 +8,15 @@ namespace NetworkMiddleware::Shared {
         uint32_t address = 0;
         uint16_t port = 0;
 
+        bool operator==(const EndPoint& other) const {
+            return address == other.address && port == other.port;
+        }
+
+        bool operator<(const EndPoint& other) const {
+            if (address != other.address) return address < other.address;
+            return port < other.port;
+        }
+
         std::string ToString() const{
             struct in_addr ip_addr {};
             ip_addr.s_addr = address;
