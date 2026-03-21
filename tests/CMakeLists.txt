@@ -13,6 +13,8 @@ add_executable(MiddlewareTests
     Shared/BitWriterReaderTests.cpp
     Shared/PacketHeaderTests.cpp
     Shared/SequenceContextTests.cpp
+    Shared/NetworkOptimizerTests.cpp
+    Shared/HeroSerializerTests.cpp
     Core/NetworkManagerTests.cpp
 )
 
