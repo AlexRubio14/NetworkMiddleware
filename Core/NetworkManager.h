@@ -7,7 +7,9 @@
 #include <memory>
 #include <functional>
 #include <map>
+#include <vector>
 #include <random>
+#include <chrono>
 
 namespace NetworkMiddleware::Core {
 
@@ -25,15 +27,24 @@ namespace NetworkMiddleware::Core {
         const Shared::EndPoint&
     )>;
 
+    // Callback que se dispara cuando un cliente se desconecta por Link Loss (kMaxRetries agotados).
+    using OnClientDisconnectedCallback = std::function<void(
+        uint16_t networkID,
+        const Shared::EndPoint&
+    )>;
+
     class NetworkManager {
     public:
-        static constexpr uint16_t         kMaxClients      = 10;
+        static constexpr uint16_t             kMaxClients       = 10;
         static constexpr std::chrono::seconds kHandshakeTimeout{5};
+        static constexpr uint8_t              kMaxRetries       = 10;
+        static constexpr std::chrono::milliseconds kResendInterval{100};
 
     private:
         std::shared_ptr<Shared::ITransport>         m_transport;
         OnDataReceivedCallback                       m_onDataReceived;
         OnClientConnectedCallback                    m_onClientConnected;
+        OnClientDisconnectedCallback                 m_onClientDisconnected;
 
         std::map<Shared::EndPoint, RemoteClient>     m_pendingClients;      // En handshake
         std::map<Shared::EndPoint, RemoteClient>     m_establishedClients;  // Conectados
@@ -48,11 +59,29 @@ namespace NetworkMiddleware::Core {
         void SendChallenge(const Shared::EndPoint& to, uint64_t salt);
         void SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID);
 
+        // P-3.3 Reliability Layer
+        void ProcessAcks(RemoteClient& client, const Shared::PacketHeader& header);
+        void ResendPendingPackets();
+        void DisconnectClient(const Shared::EndPoint& endpoint);
+        void HandleReliableOrdered(Shared::BitReader& reader, RemoteClient& client,
+                                   const Shared::EndPoint& sender, size_t totalBits,
+                                   const Shared::PacketHeader& header);
+        void DeliverBufferedReliable(RemoteClient& client, const Shared::EndPoint& sender);
+
     public:
         explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport);
 
         void SetDataCallback(OnDataReceivedCallback callback);
         void SetClientConnectedCallback(OnClientConnectedCallback callback);
+        void SetClientDisconnectedCallback(OnClientDisconnectedCallback callback);
+
+        // Envía un paquete al cliente `to`. El canal determina la garantía de entrega:
+        //   Reliable         → entrega ordenada garantizada (con buffer de recepción)
+        //   ReliableUnordered → entrega garantizada, sin orden (sin buffer)
+        //   Cualquier otro   → sin garantías (fire and forget)
+        void Send(const Shared::EndPoint& to, const std::vector<uint8_t>& payload,
+                  Shared::PacketType channel);
+
         void Update();
 
         size_t GetEstablishedCount() const { return m_establishedClients.size(); }

@@ -428,9 +428,11 @@ proposals/
 reports/
 _templates/
 claude-memory/
+.claude/
 .obsidian/
 .idea/
 *.canvas
+*.pdf
 
 # --- Middleware Specific ---
 build/
