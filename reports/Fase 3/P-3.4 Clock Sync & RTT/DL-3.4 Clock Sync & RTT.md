@@ -4,7 +4,7 @@ proposal: P-3.4
 date: 2026-03-21
 status: personal
 ---
-
+ 
 # DEV LOG — P-3.4 Clock Synchronization & RTT Estimation
 
 **Propuesta:** P-3.4 Clock Sync & RTT
@@ -56,7 +56,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### RTT sampling — de Send() a ProcessAcks()
 
-```
+```text
   SERVIDOR                           CLIENTE
        │                                  │
        │  Send(seq=42)                    │
@@ -83,7 +83,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### EMA convergencia — suavizado frente a jitter
 
-```
+```text
   Sample history (α=0.1, initial EMA=100ms):
 
   Sample  rawRTT   rttEMA
@@ -102,7 +102,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### Intervalo de reenvío adaptativo
 
-```
+```text
   dynamicInterval = max(30ms, rttEMA × 1.5)
 
   ┌──────────────────┬────────────┬──────────────────────────────────────┐
@@ -135,7 +135,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### Filtro de paquetes Unreliable caducados (m_lastProcessedSeq)
 
-```
+```text
   Paquetes enviados en orden: seq=1,2,3,4,5
   Llegan reordenados por la red: 1, 3, 2, 5, 4
 
@@ -162,7 +162,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### Brain API — GetClientNetworkStats()
 
-```
+```text
   Brain (Fase 4+)                      NetworkManager
        │                                     │
        │── GetClientNetworkStats(ep) ────────►│
@@ -189,7 +189,7 @@ UDP puede reordenar paquetes. Si llega el Snapshot seq=5 antes que el seq=3, y l
 
 ### sentTimes cleanup — higiene de memoria
 
-```
+```text
   At 60Hz × 10 clients = 600 sentTimes insertions/second
 
   Normal case (ACK arrives quickly):
@@ -280,7 +280,7 @@ if (isUnreliableChannel) {
 
 ## Cómo encaja en el sistema completo
 
-```
+```text
   Send(seq=N)                                   Recv(header.ack=N)
        │                                               │
        ├── sentTimes[N] = now ──────────────────────── ├── rawRTT = now - sentTimes[N]

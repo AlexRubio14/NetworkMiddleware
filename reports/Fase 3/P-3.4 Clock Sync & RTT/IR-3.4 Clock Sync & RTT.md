@@ -159,7 +159,7 @@ No changes. The `timestamp` field (32 bits, position bits 68–99 in the header)
 
 ## Build Verification
 
-```
+```text
 cmake --build cmake-build-debug
 [100%] Built target NetServer  ← clean, no warnings
 ```

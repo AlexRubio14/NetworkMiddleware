@@ -124,12 +124,6 @@ namespace NetworkMiddleware::Core {
                             m_onDataReceived(header, reader, sender);
                     }
 
-                    // Limpiar sentTimes con más de 2 segundos (P-3.4 hygiene).
-                    // Protege contra crecimiento indefinido en caso de ACK loss persistente.
-                    const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(2);
-                    std::erase_if(client.m_rtt.sentTimes, [&cutoff](const auto& e) {
-                        return e.second < cutoff;
-                    });
                 } else {
                     Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
                         std::format("Paquete de cliente no autenticado: {}", sender.ToString()));
@@ -396,6 +390,13 @@ namespace NetworkMiddleware::Core {
 
             if (shouldDisconnect)
                 toDisconnect.push_back(endpoint);
+
+            // Limpiar sentTimes con más de 2 segundos (P-3.4 hygiene).
+            // Ejecutado una vez por Update() por cliente, no por paquete recibido.
+            const auto cutoff = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+            std::erase_if(client.m_rtt.sentTimes, [&cutoff](const auto& e) {
+                return e.second < cutoff;
+            });
         }
 
         for (const auto& ep : toDisconnect)
@@ -420,11 +421,13 @@ namespace NetworkMiddleware::Core {
             ++client.m_rtt.sampleCount;
 
             // clockOffset = ServerNow - (ClientTime + RTT/2).
-            // header.timestamp es el reloj local del cliente cuando envió este paquete.
-            // Válido una vez que el cliente Unreal escriba su timestamp correctamente.
-            const float serverNow = static_cast<float>(Shared::PacketHeader::CurrentTimeMs());
-            client.m_rtt.clockOffset =
-                serverNow - (static_cast<float>(header.timestamp) + client.m_rtt.rttEMA / 2.0f);
+            // Solo se actualiza si el cliente ha escrito un timestamp real (≠ 0).
+            // Hasta que el cliente Unreal implemente CurrentTimeMs(), clockOffset permanece 0.
+            if (header.timestamp != 0) {
+                const float serverNow = static_cast<float>(Shared::PacketHeader::CurrentTimeMs());
+                client.m_rtt.clockOffset =
+                    serverNow - (static_cast<float>(header.timestamp) + client.m_rtt.rttEMA / 2.0f);
+            }
 
             client.m_rtt.sentTimes.erase(sentIt);
         }

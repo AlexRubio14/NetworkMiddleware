@@ -47,7 +47,7 @@ The header is rebuilt on every resend with fresh `ack`/`ack_bits`, piggybacking 
 
 ### 3. Three-channel routing in `Update()` default case
 
-```
+```text
 RecordReceived() → ProcessAcks() → route by type:
   Reliable         → HandleReliableOrdered()
   everything else  → m_onDataReceived immediately
@@ -106,7 +106,7 @@ static_cast<int16_t>(reliableSeq - client.m_nextExpectedReliableSeq) > 0
 
 Handles wrap-around at 65535 correctly (same int16_t cast pattern).
 
-### 8. `ResendPendingPackets()` disconnect flow
+### 9. `ResendPendingPackets()` disconnect flow
 
 Disconnection during retransmit iteration is deferred to avoid invalidating the `m_establishedClients` iterator. Endpoints to disconnect are collected, then `DisconnectClient()` is called after the loop.
 
@@ -114,7 +114,7 @@ Disconnection during retransmit iteration is deferred to avoid invalidating the 
 
 ## Wire Format — Reliable Ordered Packet
 
-```
+```text
 [PacketHeader: 100 bits (13 bytes)]
 [reliableSeq:  16 bits             ]  ← Reliable Ordered only
 [payload:      N bytes             ]
@@ -135,7 +135,7 @@ Disconnection during retransmit iteration is deferred to avoid invalidating the 
 
 ## Build Verification
 
-```
+```text
 cmake --build cmake-build-debug
 [100%] Built target NetServer  ← clean, no warnings
 ```

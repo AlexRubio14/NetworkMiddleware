@@ -43,7 +43,7 @@ Un sistema de **tres canales** sobre el mismo socket UDP:
 
 Antes de hablar de reenvíos, recordemos que ya tenemos en el header:
 
-```
+```text
 [sequence: 16 bits] — número de secuencia DE ESTE paquete
 [ack:      16 bits] — último seq que yo he recibido de ti
 [ack_bits: 32 bits] — ¿recibí los 32 paquetes anteriores a `ack`?
@@ -91,7 +91,7 @@ El punto clave: **guardamos solo el payload (bytes post-header), no el header co
 
 ¿Por qué? Porque en cada reenvío queremos reconstruir el header con el `ack`/`ack_bits` **más reciente** del cliente. Así cada retransmisión lleva implícitamente las confirmaciones acumuladas mientras esperábamos — más información gratis sin coste extra de ancho de banda.
 
-```
+```text
 Envío original:  [header: ack=50, bits=...] [payload]
 Reenvío 100ms:   [header: ack=53, bits=...] [mismo payload]  ← ack actualizado
 Reenvío 200ms:   [header: ack=57, bits=...] [mismo payload]  ← sigue actualizando
@@ -99,7 +99,7 @@ Reenvío 200ms:   [header: ack=57, bits=...] [mismo payload]  ← sigue actualiz
 
 ### Send() — enviar un paquete fiable
 
-```
+```text
 1. Buscar al cliente en m_establishedClients
 2. Construir PacketHeader con el estado ACK actual del cliente (piggybacking)
 3. Si es Reliable: escribir los 16 bits del reliableSeq antes del payload
@@ -112,7 +112,7 @@ Reenvío 200ms:   [header: ack=57, bits=...] [mismo payload]  ← sigue actualiz
 
 El `reliableSeq` es diferente al `sequence` del header. El `sequence` del header es el número global de todos los paquetes (sirve para el ACK bitmask). El `reliableSeq` es un contador propio del canal Reliable Ordered, que empieza en 0 y sube solo para los paquetes Reliable. Es el que usamos para el reordenamiento en recepción.
 
-```
+```text
 Paquete 1: header.sequence=5, reliableSeq=0 (primera compra)
 Paquete 2: header.sequence=6 (snapshot, sin reliableSeq)
 Paquete 3: header.sequence=7, reliableSeq=1 (segunda compra)
@@ -122,7 +122,7 @@ Paquete 3: header.sequence=7, reliableSeq=1 (segunda compra)
 
 Se llama al inicio de cada `Update()`, antes de procesar nuevos paquetes.
 
-```
+```text
 Para cada cliente establecido:
   Para cada PendingPacket en m_reliableSents:
     ¿Han pasado 100ms desde el último envío?
@@ -150,7 +150,7 @@ Cada vez que llega un paquete de un cliente establecido, miramos su header y eli
 
 Si un PendingPacket alcanza 10 reintentos sin ACK, se considera que el cliente está caído (Link Loss). No es un desconexión limpia — simplemente dejó de responder.
 
-```
+```text
 Log: "Link Loss: cliente IP:Puerto (NetworkID=X) desconectado tras 10 reintentos"
 Disparar m_onClientDisconnected → notificar al game layer
 Borrar de m_establishedClients
@@ -162,7 +162,7 @@ El game layer puede usar este callback para eliminar al héroe del mapa, liberar
 
 Los paquetes Reliable Ordered llevan un `reliableSeq` de 16 bits justo después del header:
 
-```
+```text
 [header: 100 bits = 13 bytes]
 [reliableSeq: 16 bits]
 [payload: N bytes]
@@ -170,7 +170,7 @@ Los paquetes Reliable Ordered llevan un `reliableSeq` de 16 bits justo después 
 
 Al recibirlo en `HandleReliableOrdered`:
 
-```
+```text
 1. Leer los 16 bits de reliableSeq
 2. Extraer el payload: (totalBits - 116) / 8 bytes
                          ↑100 header + 16 reliableSeq
@@ -182,7 +182,7 @@ Al recibirlo en `HandleReliableOrdered`:
 
 El "drenar buffer" (`DeliverBufferedReliable`) es el bucle que sigue entregando paquetes del buffer mientras el siguiente esperado esté disponible:
 
-```
+```text
 Esperamos reliableSeq=3
 Buffer: {3: data_A, 5: data_B}
 → Entregar data_A, expected=4
@@ -262,7 +262,7 @@ sequenceDiagram
 
 ### Los tres canales — garantías de entrega
 
-```
+```text
   ┌─────────────────────┬──────────────────┬──────────────────────────────┬──────────────────────────────┐
   │  Canal              │  PacketType      │  Garantía                    │  Uso en MOBA                 │
   ├─────────────────────┼──────────────────┼──────────────────────────────┼──────────────────────────────┤
@@ -284,7 +284,7 @@ sequenceDiagram
 
 ### PendingPacket lifecycle — de Send() a ACK o Link Loss
 
-```
+```text
   Send(ep, payload, Reliable)
          │
          ▼
@@ -329,7 +329,7 @@ sequenceDiagram
 
 ### Reliable Ordered — buffer de recepción y drain
 
-```
+```text
   Expected: m_nextExpectedReliableSeq = 3
   Packets arrive out of order: 5 → 4 → 6 → 3
 
@@ -438,6 +438,6 @@ Cuatro campos, dos por dirección: uno para envío (`m_reliableSents` + `m_nextO
 - Unreliable y ReliableUnordered no bloquean la entrega de datos de posición/input
 
 **Pendiente (próxima propuesta):**
-- P-3.4 Clock Sync: RTT real → `kResendInterval` dinámico (RTT × 1.2) en lugar de 100ms fijo
+- P-3.4 Clock Sync: RTT real → `kResendInterval` dinámico (RTT × 1.5) en lugar de 100ms fijo
 - P-3.5 Delta Compression: baselines + zig-zag encoding para reducir payload de Snapshots
 - P-3.6 Session Recovery: reconexión, tokens, heartbeats formales
