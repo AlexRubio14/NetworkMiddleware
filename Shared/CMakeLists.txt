@@ -27,6 +27,9 @@ add_library(MiddlewareShared STATIC
         Data/Network/HeroSerializer.h
         Gameplay/ViegoEntity.cpp
         Gameplay/ViegoEntity.h
+        Network/PacketTypes.h
+        Network/PacketHeader.h
+        Network/PacketHeader.cpp
 )
 
 target_include_directories(MiddlewareShared PUBLIC
