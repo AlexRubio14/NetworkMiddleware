@@ -30,6 +30,7 @@ add_library(MiddlewareShared STATIC
         Network/PacketTypes.h
         Network/PacketHeader.h
         Network/PacketHeader.cpp
+        Network/HandshakePackets.h
 )
 
 target_include_directories(MiddlewareShared PUBLIC

@@ -5,6 +5,7 @@ add_library(MiddlewareCore STATIC
         NetworkManager.cpp
         PacketManager.h
         PacketManager.cpp
+        RemoteClient.h
 )
 
 target_link_libraries(MiddlewareCore PUBLIC MiddlewareShared)
