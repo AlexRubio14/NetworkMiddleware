@@ -39,6 +39,16 @@ namespace NetworkMiddleware::Shared {
         static constexpr uint32_t kBitCount  = 16 + 16 + 32 + 4 + 4 + 32;  // = 100 bits
         static constexpr uint32_t kByteCount = (kBitCount + 7) / 8;         // = 13 bytes
 
+        // Devuelve true si 'seq' está confirmado por el ack + ack_bits de este header.
+        // Usa la misma aritmética modular int16_t que SequenceContext::RecordReceived.
+        bool IsAcked(uint16_t seq) const {
+            const int16_t diff = static_cast<int16_t>(ack - seq);
+            if (diff == 0) return true;                        // ACK directo
+            if (diff > 0 && diff <= 32)
+                return (ack_bits >> (diff - 1)) & 1u;          // En la ventana del bitmask
+            return false;
+        }
+
         void Write(BitWriter& writer) const;
         static PacketHeader Read(BitReader& reader);
     };
