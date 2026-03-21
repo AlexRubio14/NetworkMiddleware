@@ -417,6 +417,21 @@ FodyWeavers.xsd
 *.msm
 *.msp
 
+# --- Project workflow (local only, not for repo) ---
+CLAUDE.md
+DEVELOPMENT_MEMORY.md
+DESIGN_PROPOSALS.md
+HANDOFF_TEMPLATES.md
+HOME.md
+proposals.md
+proposals/
+reports/
+_templates/
+claude-memory/
+.obsidian/
+.idea/
+*.canvas
+
 # --- Middleware Specific ---
 build/
 out/
