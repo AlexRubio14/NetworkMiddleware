@@ -15,6 +15,7 @@ add_executable(MiddlewareTests
     Shared/SequenceContextTests.cpp
     Shared/NetworkOptimizerTests.cpp
     Shared/HeroSerializerTests.cpp
+    Shared/DeltaCompressionTests.cpp
     Core/NetworkManagerTests.cpp
 )
 

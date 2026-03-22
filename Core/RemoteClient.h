@@ -1,6 +1,8 @@
 #pragma once
 #include "../Shared/NetworkAddress.h"
 #include "../Shared/Network/PacketHeader.h"
+#include "../Shared/Data/HeroState.h"
+#include <array>
 #include <chrono>
 #include <map>
 #include <vector>
@@ -93,6 +95,34 @@ namespace NetworkMiddleware::Core {
         // Usa comparación int16_t modular para manejar wrap-around en 65535.
         uint16_t                                  m_lastProcessedSeq            = 0;
         bool                                      m_lastProcessedSeqInitialized = false;
+
+        // --- P-3.5 Snapshot History (Delta Compression baseline) ---
+
+        static constexpr size_t kHistorySize = 64; // ~1 second at 60 Hz
+
+        struct SnapshotEntry {
+            uint16_t            seq   = 0;
+            bool                valid = false;
+            Shared::Data::HeroState state;
+        };
+
+        std::array<SnapshotEntry, kHistorySize> m_history{};
+
+        // Records a sent snapshot so it can later serve as a delta baseline.
+        void RecordSnapshot(uint16_t seq, const Shared::Data::HeroState& state) {
+            auto& entry = m_history[seq % kHistorySize];
+            entry.seq   = seq;
+            entry.valid = true;
+            entry.state = state;
+        }
+
+        // Returns the stored state for seq, or nullptr if it has been evicted.
+        // nullptr → caller must fall back to a full sync.
+        const Shared::Data::HeroState* GetBaseline(uint16_t seq) const {
+            const auto& entry = m_history[seq % kHistorySize];
+            if (!entry.valid || entry.seq != seq) return nullptr;
+            return &entry.state;
+        }
     };
 
 }

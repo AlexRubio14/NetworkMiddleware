@@ -11,16 +11,25 @@ namespace NetworkMiddleware::Shared::Network {
      */
     class HeroSerializer {
     public:
-        // Main entry point for sending a hero's delta update
+        // Full-state serialization (dirty-mask based, ~145 bits for a full sync)
         static void Serialize(const Data::HeroState& state, BitWriter& writer);
-
-        // Main entry point for receiving and updating a hero's state
         static void Deserialize(Data::HeroState& outState, BitReader& reader);
 
+        // Delta serialization (P-3.5): encodes only fields that changed vs baseline.
+        // Wire format: networkID(32) + 6 inline dirty bits, each followed by
+        // ZigZag-VLE delta if set. Typically 38–90 bits vs 145 for full sync.
+        static void SerializeDelta(const Data::HeroState& current,
+                                   const Data::HeroState& baseline,
+                                   BitWriter& writer);
+
+        // Applies the delta from reader on top of baseline and writes into outState.
+        static void DeserializeDelta(Data::HeroState& outState,
+                                     const Data::HeroState& baseline,
+                                     BitReader& reader);
+
     private:
-        // World boundaries for quantization (consistent between Server & Client)
-        static constexpr float MAP_MIN = -500.0f;
-        static constexpr float MAP_MAX = 500.0f;
-        static constexpr int POS_BITS = 14; // 6cm precision
+        static constexpr float MAP_MIN  = -500.0f;
+        static constexpr float MAP_MAX  =  500.0f;
+        static constexpr int   POS_BITS = 14;
     };
 }
