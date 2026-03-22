@@ -79,7 +79,8 @@ trap cleanup EXIT INT TERM
 
 # ── Results (parallel arrays indexed 0-2) ────────────────────────────────────
 
-R_LABEL=(); R_CLIENTS=(); R_NETEM=(); R_TICK=(); R_OUT=(); R_RETRANS=(); R_EFF=()
+R_LABEL=(); R_CLIENTS=(); R_LOST=(); R_NETEM=()
+R_TICK=(); R_BUDGET=(); R_OUT=(); R_IN=(); R_RETRANS=(); R_EFF=()
 
 # ── run_scenario ──────────────────────────────────────────────────────────────
 # Args: <label> <bot_count> <delay_ms> <loss_pct> [<duration_s>]
@@ -152,26 +153,43 @@ run_scenario() {
 
     if [[ -z "$last_line" ]]; then
         warn "No [PROFILER] line found. Check $server_log"
-        R_LABEL+=("$label"); R_CLIENTS+=("?")
+        R_LABEL+=("$label"); R_CLIENTS+=("?"); R_LOST+=("?")
         R_NETEM+=("${delay_ms}ms/${loss_pct}%")
-        R_TICK+=("N/A"); R_OUT+=("N/A"); R_RETRANS+=("N/A"); R_EFF+=("N/A")
+        R_TICK+=("N/A"); R_BUDGET+=("N/A")
+        R_OUT+=("N/A"); R_IN+=("N/A"); R_RETRANS+=("N/A"); R_EFF+=("N/A")
         return
     fi
 
     ok "Last snapshot: $last_line"
 
-    local clients avg_tick out retries delta_eff
+    local clients avg_tick out_kbps in_kbps retries delta_eff
     clients=$(   echo "$last_line" | grep -oP 'Clients: \K[0-9]+')
-    avg_tick=$(  echo "$last_line" | grep -oP 'Avg Tick: \K[0-9.]+ms')
-    out=$(       echo "$last_line" | grep -oP 'Out: \K[0-9.]+kbps')
+    avg_tick=$(  echo "$last_line" | grep -oP 'Avg Tick: \K[0-9.]+')   # ms as float
+    out_kbps=$(  echo "$last_line" | grep -oP 'Out: \K[0-9.]+kbps')
+    in_kbps=$(   echo "$last_line" | grep -oP 'In: \K[0-9.]+kbps')
     retries=$(   echo "$last_line" | grep -oP 'Retries: \K[0-9]+')
     delta_eff=$( echo "$last_line" | grep -oP 'Delta Efficiency: \K[0-9]+%')
 
+    # Tick budget % = avg_tick_ms / 10ms × 100
+    local budget="?"
+    if [[ -n "$avg_tick" ]]; then
+        budget=$(awk "BEGIN { printf \"%.1f%%\", ($avg_tick / 10.0) * 100 }")
+    fi
+
+    # Bots lost in handshake = launched - connected
+    local lost="?"
+    if [[ -n "$clients" ]]; then
+        lost=$(( bot_count - clients ))
+    fi
+
     R_LABEL+=("$label")
-    R_CLIENTS+=("${clients:-?}")
+    R_CLIENTS+=("${clients:-?}/${bot_count}")
+    R_LOST+=("${lost:-?}")
     R_NETEM+=("${delay_ms}ms / ${loss_pct}%")
-    R_TICK+=("${avg_tick:-?}")
-    R_OUT+=("${out:-?}")
+    R_TICK+=("${avg_tick:-?}ms")
+    R_BUDGET+=("${budget}")
+    R_OUT+=("${out_kbps:-?}")
+    R_IN+=("${in_kbps:-?}")
     R_RETRANS+=("${retries:-?}")
     R_EFF+=("${delta_eff:-?}")
 }
@@ -190,15 +208,16 @@ echo -e "${BOLD}${CYAN}  BENCHMARK RESULTS — NetworkMiddleware P-4.3${NC}"
 echo -e "${BOLD}${CYAN}  $(uname -r) | $(date '+%Y-%m-%d %H:%M')${NC}"
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-printf "${BOLD}%-22s %-9s %-16s %-11s %-12s %-11s %-18s${NC}\n" \
-    "Scenario" "Clients" "tc netem" "Avg Tick" "Out (kbps)" "Retrans." "Delta Efficiency"
-echo "──────────────────────────────────────────────────────────────────────────────────────"
+printf "${BOLD}%-22s %-12s %-7s %-16s %-11s %-10s %-12s %-11s %-11s %-16s${NC}\n" \
+    "Scenario" "Connected" "Lost" "tc netem" "Avg Tick" "Budget%" "Out" "In" "Retrans." "Delta Eff."
+echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────"
 for i in "${!R_LABEL[@]}"; do
-    printf "%-22s %-9s %-16s %-11s %-12s %-11s %-18s\n" \
-        "${R_LABEL[$i]}" "${R_CLIENTS[$i]}" "${R_NETEM[$i]}" \
-        "${R_TICK[$i]}" "${R_OUT[$i]}" "${R_RETRANS[$i]}" "${R_EFF[$i]}"
+    printf "%-22s %-12s %-7s %-16s %-11s %-10s %-12s %-11s %-11s %-16s\n" \
+        "${R_LABEL[$i]}" "${R_CLIENTS[$i]}" "${R_LOST[$i]}" "${R_NETEM[$i]}" \
+        "${R_TICK[$i]}" "${R_BUDGET[$i]}" "${R_OUT[$i]}" "${R_IN[$i]}" \
+        "${R_RETRANS[$i]}" "${R_EFF[$i]}"
 done
-echo "──────────────────────────────────────────────────────────────────────────────────────"
+echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────"
 echo ""
 ok "Raw server logs: $LOG_DIR"
 ok "Done."

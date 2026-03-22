@@ -68,19 +68,23 @@ namespace NetworkMiddleware::Core {
 
         const Snapshot s = GetSnapshot(connectedClients);
 
-        // Compute average output rate since profiler start (cumulative / elapsed).
+        // Compute average in/out rates since profiler start (cumulative / elapsed).
         const float elapsedSec = std::chrono::duration<float>(
             now - m_startTime).count();
         const float sentKbps = (elapsedSec > 0.0f)
-            ? (static_cast<float>(s.totalBytesSent) * 8.0f / 1000.0f / elapsedSec)
+            ? (static_cast<float>(s.totalBytesSent)     * 8.0f / 1000.0f / elapsedSec)
+            : 0.0f;
+        const float recvKbps = (elapsedSec > 0.0f)
+            ? (static_cast<float>(s.totalBytesReceived) * 8.0f / 1000.0f / elapsedSec)
             : 0.0f;
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
             std::format(
-                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Out: {:.1f}kbps | Retries: {} | Delta Efficiency: {:.0f}%",
+                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Out: {:.1f}kbps | In: {:.1f}kbps | Retries: {} | Delta Efficiency: {:.0f}%",
                 connectedClients,
                 s.avgTickTimeUs / 1000.0f,   // µs → ms
                 sentKbps,
+                recvKbps,
                 s.retransmissions,
                 s.deltaEfficiency * 100.0f));
     }
