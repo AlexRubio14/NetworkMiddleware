@@ -31,6 +31,10 @@
          static void LogPacket(LogChannel channel, std::shared_ptr<std::vector<uint8_t>> data,
                               DumpMode mode = DumpMode::Hex);
 
+         // Public formatting — usable in tests and tools without going through the queue.
+         static std::string FormatPacket(const std::vector<uint8_t>& data,
+                                         DumpMode mode = DumpMode::Hex);
+
          // Visual helpers — write directly to stdout (no queue)
          static void Banner(const std::string& title);
          static void Separator(const std::string& label = "");

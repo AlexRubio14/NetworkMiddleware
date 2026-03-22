@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(MiddlewareTests
     Shared/BitWriterReaderTests.cpp
+    Shared/LoggerTests.cpp
     Shared/PacketHeaderTests.cpp
     Shared/SequenceContextTests.cpp
     Shared/NetworkOptimizerTests.cpp

@@ -4,6 +4,36 @@
 
 using namespace NetworkMiddleware::Shared;
 
+// ─── Bounds safety (truncated / malformed packet) ────────────────────────────
+// A truncated packet must never trigger UB — BitReader returns partial data
+// instead of accessing out-of-bounds memory.
+
+TEST(BitWriterReader, ReadBeyondBuffer_ReturnsPartialNoUB) {
+    // Buffer holds 8 bits (1 byte), but we ask for 16.
+    // Must not crash, assert, or cause UB.
+    const std::vector<uint8_t> buf = {0xFF};
+    BitReader r(buf, 8);
+    r.ReadBits(8);                    // consumes the only byte
+    const uint32_t extra = r.ReadBits(8);  // reads past end
+    EXPECT_EQ(extra, 0u);             // out-of-range bytes return 0
+}
+
+TEST(BitWriterReader, ReadFromEmptyBuffer_ReturnsZero) {
+    const std::vector<uint8_t> empty;
+    BitReader r(empty, 0);
+    EXPECT_EQ(r.ReadBits(8), 0u);
+}
+
+TEST(BitWriterReader, ReadPartiallyTruncated_ReturnsAvailableBits) {
+    // Buffer holds 1 byte (0xa5), ask for 16 bits in a single call.
+    // BitReader reads the 8 available bits then hits the bounds guard.
+    // Result: lower 8 bits = 0xa5, upper 8 bits = 0 (not accessed).
+    const std::vector<uint8_t> buf = {0xa5};
+    BitReader r(buf, 8);
+    const uint32_t val = r.ReadBits(16);
+    EXPECT_EQ(val, 0xa5u);
+}
+
 // ─── Single field round-trips ────────────────────────────────────────────────
 
 TEST(BitWriterReader, WriteSingleOneBit) {

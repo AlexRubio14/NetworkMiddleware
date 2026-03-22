@@ -5,8 +5,6 @@ add_library(MiddlewareCore STATIC
         NetworkManager.cpp
         NetworkProfiler.h
         NetworkProfiler.cpp
-        PacketManager.h
-        PacketManager.cpp
         RemoteClient.h
         RemoteClient.cpp
         BotClient.h

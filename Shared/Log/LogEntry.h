@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 #include <condition_variable>
 #include <thread>
 #include <chrono>
@@ -24,6 +25,8 @@ namespace NetworkMiddleware::Shared {
         std::string message;
         std::shared_ptr<std::vector<uint8_t>> rawData;
         std::chrono::system_clock::time_point timestamp;
-        DumpMode   dumpMode = DumpMode::Hex;
+        DumpMode   dumpMode   = DumpMode::Hex;
+        // Set only for SYNC sentinel entries — called by consumer when entry is processed.
+        std::function<void()> syncCallback;
     };
 }

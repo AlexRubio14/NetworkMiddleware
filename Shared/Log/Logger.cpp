@@ -63,28 +63,31 @@ namespace NetworkMiddleware::Shared {
     }
 
     void Logger::Sync() {
-        // Push a sentinel entry with a special flag (empty message + nullptr data).
-        // We block until the consumer has processed everything up to this marker.
-        std::mutex       doneMutex;
+        // Push a SYNC sentinel. The consumer thread fires syncCallback when it
+        // processes the sentinel, which unblocks the waiting caller.
+        // wait_for(5s) guards against deadlock if the logger thread has stopped.
+        std::mutex              doneMutex;
         std::condition_variable doneCv;
-        bool             done = false;
+        bool                    done = false;
 
         {
             std::lock_guard lock(m_mutex);
-            // Abuse rawData as a signal: use a shared_ptr to a flag bool.
-            auto signal = std::make_shared<std::vector<uint8_t>>();  // empty data = sentinel
             LogEntry sentinel{};
             sentinel.level     = LogLevel::Debug;
             sentinel.channel   = LogChannel::General;
-            sentinel.message   = "\x01SYNC";  // magic prefix consumed silently
-            sentinel.rawData   = signal;
+            sentinel.message   = "\x01SYNC";
             sentinel.timestamp = std::chrono::system_clock::now();
+            sentinel.syncCallback = [&doneMutex, &doneCv, &done]() {
+                std::lock_guard lg(doneMutex);
+                done = true;
+                doneCv.notify_one();
+            };
             m_logQueue.push(std::move(sentinel));
         }
         m_cv.notify_one();
 
-        // Simple approach: drain by flushing stdout after a brief yield
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::unique_lock doneLock(doneMutex);
+        doneCv.wait_for(doneLock, std::chrono::seconds(5), [&done] { return done; });
         std::cout.flush();
     }
 
@@ -157,9 +160,11 @@ namespace NetworkMiddleware::Shared {
                 m_logQueue.pop();
             }
 
-            // Consume the sync sentinel silently
-            if (entry.message == "\x01SYNC")
+            // Consume the sync sentinel — fire callback to unblock Sync() caller
+            if (entry.message == "\x01SYNC") {
+                if (entry.syncCallback) entry.syncCallback();
                 continue;
+            }
 
             // ── Timestamp: HH:MM:SS.mmm ──
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -245,6 +250,16 @@ namespace NetworkMiddleware::Shared {
             case LogChannel::Brain:     return "BRAIN";
             case LogChannel::General:   return "GENERAL";
             default:                    return "UNK";
+        }
+    }
+
+    // ─── Public FormatPacket dispatcher ──────────────────────────────────────
+
+    std::string Logger::FormatPacket(const std::vector<uint8_t>& data, DumpMode mode) {
+        switch (mode) {
+            case DumpMode::Binary:    return FormatPacketBinary(data);
+            case DumpMode::HexBinary: return FormatPacketHexBinary(data);
+            default:                  return FormatPacketHex(data);
         }
     }
 

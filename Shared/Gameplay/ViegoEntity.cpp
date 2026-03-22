@@ -1,6 +1,7 @@
 ﻿#include "ViegoEntity.h"
 #include "../Data/Network/HeroSerializer.h"
-#include <iostream> // For debug logging
+#include "../Log/Logger.h"
+#include <format>
 
 namespace NetworkMiddleware::Shared::Gameplay {
 
@@ -31,7 +32,8 @@ namespace NetworkMiddleware::Shared::Gameplay {
         // Slot 3: Harrowed Path (E)
         // Slot 4: Heartbreaker (R)
         
-        std::cout << "Viego casting ability in slot: " << slot << std::endl;
+        Logger::Log(LogLevel::Debug, LogChannel::General,
+            std::format("ViegoEntity: casting ability slot {}", slot));
         
         // Example: Casting Q might cost nothing but trigger a cooldown or animation state
         // m_state.stateFlags |= (1 << 2); // Set 'isCasting' bit

@@ -19,6 +19,9 @@ namespace NetworkMiddleware::Shared
             uint32_t bitsToRead = (numBits < bitsAvailableInByte) ? numBits : bitsAvailableInByte;
 
             // Create mask and extract bits from current byte
+            if (byteIndex >= m_buffer.size())
+                return value;   // truncated packet — return what we have so far
+
             uint32_t mask = (1U << bitsToRead) - 1;
             uint32_t extractedBits = (m_buffer[byteIndex] >> bitOffset) & mask;
 
