@@ -1,6 +1,5 @@
 ﻿#pragma once
 #include <string>
-#include <arpa/inet.h>
 #include <cstdint>
 
 namespace NetworkMiddleware::Shared {
@@ -17,11 +16,13 @@ namespace NetworkMiddleware::Shared {
             return port < other.port;
         }
 
-        std::string ToString() const{
-            struct in_addr ip_addr {};
-            ip_addr.s_addr = address;
-            char* ip_str = inet_ntoa(ip_addr);
-            return (ip_str ? std::string(ip_str) : "0.0.0.0") + ":" + std::to_string(port);
+        // Cross-platform: manual byte extraction (network byte order, no arpa/inet.h needed).
+        std::string ToString() const {
+            return std::to_string( address        & 0xFF) + "." +
+                   std::to_string((address >>  8) & 0xFF) + "." +
+                   std::to_string((address >> 16) & 0xFF) + "." +
+                   std::to_string((address >> 24) & 0xFF) + ":" +
+                   std::to_string(port);
         }
     };
 }
