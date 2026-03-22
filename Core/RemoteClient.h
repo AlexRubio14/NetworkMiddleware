@@ -125,10 +125,12 @@ namespace NetworkMiddleware::Core {
         bool isZombie = false;
 
         // Timestamp of the last packet received from this client.
-        std::chrono::steady_clock::time_point lastIncomingTime;
+        // Default-initialized to epoch; always set explicitly before emplacing into m_establishedClients.
+        std::chrono::steady_clock::time_point lastIncomingTime{};
 
         // Timestamp of the last packet sent to this client (used for heartbeat triggering).
-        std::chrono::steady_clock::time_point lastOutgoingTime;
+        // Default-initialized to epoch; always set explicitly before emplacing into m_establishedClients.
+        std::chrono::steady_clock::time_point lastOutgoingTime{};
 
         // When the client transitioned to zombie state (for expiry calculation).
         std::chrono::steady_clock::time_point zombieTime;

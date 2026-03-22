@@ -260,5 +260,40 @@ TEST(SessionRecovery, Reconnect_NonZombieNetworkID_Rejected) {
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
 
-    EXPECT_EQ(nm.GetEstablishedCount(), 1u); // original client unaffected
+    EXPECT_EQ(nm.GetEstablishedCount(), 1u);
+    // Confirm it is the ORIGINAL endpoint still active, not the new one
+    EXPECT_TRUE(nm.GetClientNetworkStats(ep).has_value());
+    EXPECT_FALSE(nm.GetClientNetworkStats(newEp).has_value());
+}
+
+TEST(SessionRecovery, Reconnect_OccupiedEndpoint_Rejected) {
+    // If another active client already occupies the new endpoint,
+    // the reconnection must be rejected without corrupting either session.
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    const EndPoint ep1 = MakeEndpoint(0x0100007F, 9000); // zombie
+    const EndPoint ep2 = MakeEndpoint(0x0200007F, 9001); // active, occupies target endpoint
+
+    auto [networkID, token] = CompleteHandshake(*t, nm, ep1);
+    CompleteHandshake(*t, nm, ep2); // ep2 is now active
+
+    // Make ep1 zombie
+    nm.ProcessSessionKeepAlive(std::chrono::steady_clock::now() + std::chrono::seconds(11));
+    ASSERT_TRUE(nm.IsClientZombie(ep1));
+
+    // Try to reconnect ep1 from ep2 — ep2 is already occupied
+    t->InjectPacket(MakeReconnectionRequestPacket(networkID, token), ep2);
+    nm.Update();
+
+    ASSERT_GE(t->sentPackets.size(), 1u);
+    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto h = PacketHeader::Read(r);
+    EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
+
+    // ep1 zombie must still exist (not erased before validation)
+    EXPECT_TRUE(nm.IsClientZombie(ep1));
+    // ep2 active session must be unaffected
+    EXPECT_TRUE(nm.GetClientNetworkStats(ep2).has_value());
+    EXPECT_EQ(nm.GetEstablishedCount(), 2u);
 }

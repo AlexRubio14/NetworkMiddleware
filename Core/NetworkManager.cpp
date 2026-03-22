@@ -654,6 +654,17 @@ namespace NetworkMiddleware::Core {
             return;
         }
 
+        // Guard: if the new endpoint is already occupied by another active client,
+        // reject the reconnection. We must check BEFORE erasing the zombie entry
+        // to avoid losing the session if emplace would silently fail (map semantics).
+        if (m_establishedClients.contains(sender)) {
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("ReconnectionRequest: endpoint {} ya está ocupado — rechazado",
+                    sender.ToString()));
+            SendHeaderOnly(Shared::PacketType::ConnectionDenied, sender);
+            return;
+        }
+
         // Valid reconnection: move client to new endpoint
         RemoteClient client     = std::move(it->second);
         m_establishedClients.erase(it);
