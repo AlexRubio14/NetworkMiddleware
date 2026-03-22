@@ -33,16 +33,18 @@ using namespace NetworkMiddleware::Core;
 using namespace NetworkMiddleware::Shared;
 using namespace NetworkMiddleware::Transport;
 
-// Parse "A.B.C.D" into the uint32_t layout used by EndPoint.
-// EndPoint stores octets in little-endian order: octet A in bits 0-7, etc.
+// Parse "A.B.C.D" into a uint32_t in network byte order (big-endian).
+// sf::IpAddress(uint32_t) and sf::IpAddress::toInteger() both use network
+// byte order, so EndPoints used with SFMLTransport must match.
+// Note: test-only EndPoints (MockTransport) are opaque keys — unaffected.
 static uint32_t ParseIpv4(const std::string& ip) {
     uint32_t result = 0;
-    int shift = 0;
+    int shift = 24;  // MSB first: octet A in bits 24-31 (network byte order)
     std::istringstream ss(ip);
     std::string token;
-    while (std::getline(ss, token, '.') && shift < 32) {
+    while (std::getline(ss, token, '.') && shift >= 0) {
         result |= (static_cast<uint32_t>(std::stoi(token)) << shift);
-        shift += 8;
+        shift -= 8;
     }
     return result;
 }

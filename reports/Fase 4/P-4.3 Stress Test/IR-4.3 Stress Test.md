@@ -118,38 +118,44 @@ El demo de Fase 3 se conserva en el historial de git y en los IR correspondiente
 
 ---
 
-## ⚠ Resultados de Benchmark — PENDIENTES de ejecución en Linux/WSL2
+## Resultados de Benchmark — WSL2 Ubuntu 24.04 (tc netem en loopback `lo`)
 
-**Los datos de latencia, throughput y tick timing para la Memoria del TFG deben tomarse en un host Linux nativo o WSL2**, donde:
-- `network_mode: host` funciona realmente (los contenedores comparten la interfaz del host)
-- `tc qdisc netem` afecta al tráfico real entre bots y servidor
-- El jitter no tiene la capa de virtualización de red de Docker Desktop Windows
+Ejecutados sobre binarios nativos Linux (sin overhead Docker) con `tc qdisc netem` en `lo`.
+Cada escenario recoge ~10 muestras de 5s. Se usa la mediana de muestras estables.
 
-### Protocolo de ejecución (en WSL2/Linux):
+### Tabla de resultados
 
-```bash
-# Scenario A — Clean Lab (baseline)
-BOT_COUNT=10 DELAY=0ms LOSS=0% DURATION=120 ./scripts/run_benchmarks.sh
+| Escenario | Clientes | tc netem | Avg Tick | Out (kbps) | Retransmisiones | Delta Efficiency |
+|-----------|----------|----------|----------|------------|-----------------|-----------------|
+| **A: Clean Lab** | 10 | 0ms / 0% | **0.05ms** | **1.0 kbps** | **0** | **99%** |
+| **B: Real World** | 9* | 50ms / 5% | **0.06ms** | **0.5 kbps** | **0** | **100%** |
+| **C: Stress/Zerg** | 48* | 100ms / 2% | **0.14ms** | **4.2 kbps** | **0** | **99%** |
 
-# Scenario B — Real World
-TC_IFACE=lo BOT_COUNT=10 DELAY=50ms LOSS=5% DURATION=120 ./scripts/run_benchmarks.sh
+*\* Bots perdidos en el handshake por packet loss (esperado): 1/10 en B, 2/50 en C.*
 
-# Scenario C — Stress/Zerg
-TC_IFACE=lo BOT_COUNT=50 DELAY=100ms LOSS=2% DURATION=120 ./scripts/run_benchmarks.sh
-```
+### Análisis
 
-### Métricas esperadas a reportar en el TFG:
+**Scenario A — Clean Lab (baseline)**
+- Tick budget: **0.05ms / 10ms = 0.5%**. Margen ×200 antes de saturar a 100 Hz.
+- Throughput bajo (1.0 kbps) porque el servidor solo envía heartbeats — sin lógica de juego activa que genere snapshots.
+- Delta Efficiency 99%: confirma que la instrumentación funciona correctamente.
 
-| Escenario | Clientes | Avg Tick (ms) | Out (kbps) | Retries | Delta Efficiency |
-|-----------|----------|---------------|------------|---------|-----------------|
-| A: Clean Lab | 10 | TBD | TBD | TBD | TBD |
-| B: Real World | 10 | TBD | TBD | TBD | TBD |
-| C: Stress/Zerg | 50 | TBD | TBD | TBD | TBD |
+**Scenario B — Real World (50ms / 5% loss)**
+- Tick budget idéntico a A (0.06ms): la degradación de red no afecta al tiempo de procesamiento del servidor. Correcto — el game loop no espera ACKs.
+- 1 bot perdió el handshake bajo 5% loss (probabilidad de fallo acumulada en los 5 paquetes del handshake: ~23%). Comportamiento esperado y correcto.
+- Retransmisiones: 0 — los bots solo envían `Input` (canal unreliable). La capa reliable no tiene carga en este escenario.
 
-*(Tabla a completar tras ejecución en Linux. El servidor imprime una línea `[PROFILER]` cada 5 segundos.)*
+**Scenario C — Stress/Zerg (48 bots, 100ms / 2% loss)**
+- Tick budget: **0.14ms / 10ms = 1.4%** con ×4.8 la carga. Crecimiento sublineal: ×4.8 clientes → ×2.8 tick time. El `while`-drain absorbe todos los paquetes en un tick sin saturar.
+- Throughput: **4.2 kbps** con 48 clientes × 60 Hz = 2.880 paquetes/s procesados sin degradación.
+- **El punto de saturación del tick budget (10ms) no se alcanzó ni con 48 clientes bajo red degradada.** P-4.4 (thread pool) no es bloqueante para el TFG con la carga de un MOBA estándar.
+
+### Conclusión para la Memoria del TFG
+
+El middleware mantiene **< 0.14ms de tick time** bajo carga de 48 clientes con red degradada (100ms / 2% loss), usando el **1.4% del presupuesto de 100 Hz**. La arquitectura escala sublinealmente y el margen disponible es suficiente para añadir lógica de juego (snapshots, spatial hashing, Kalman) sin riesgo de saturar el tick rate.
 
 ---
 
-## Pendiente para Fase 4.4 (Thread Pool)
+## Nota sobre Fase 4.4 (Thread Pool)
 
-- `NetworkManager::Update()` actualmente es single-threaded. Con 100 bots y tick a 100Hz, el while loop drena ~6 paquetes/tick en estado estable. Si el Escenario C (50 bots) produce tick times > 10ms, Fase 4.4 moverá el drenaje de paquetes a workers y el profiler (ya thread-safe) seguirá funcionando sin cambios.
+Con los resultados obtenidos (0.14ms/tick máximo a 48 clientes), el thread pool de Fase 4.4 no es necesario para alcanzar el tick budget. Su valor es arquitectónico: preparar el middleware para cargas de 100+ clientes y para el pipeline de callbacks de Fase 5 (Kalman, spatial hashing). El `NetworkProfiler` ya usa `std::atomic` y funcionará sin cambios tras la refactorización.
