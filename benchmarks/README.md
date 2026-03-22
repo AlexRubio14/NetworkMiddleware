@@ -45,9 +45,19 @@ profiler. Calculado como `totalBytesSent × 8 / elapsedSeconds / 1000`.
 Incluye: paquetes de handshake, heartbeats, reenvíos de paquetes fiables, y
 cualquier snapshot/dato de juego enviado desde el servidor.
 
-En los benchmarks actuales el valor es bajo (1-5 kbps) porque el servidor no
-tiene lógica de juego que genere snapshots de posición. En producción (con
-serialización de HeroState a 60 Hz) el valor esperado sería ~10-50 kbps.
+**Por qué el valor es tan bajo (4.9 kbps con 47 clientes):**
+El servidor en el benchmark solo envía heartbeats — un paquete header-only
+(104 bits = 13 bytes) por cliente cada segundo cuando no hay otro tráfico
+saliente. Cálculo exacto: `47 clientes × 13 bytes × 1/s × 8 / 1000 = 4.89 kbps`.
+El valor observado de 4.9 kbps valida que la instrumentación es correcta.
+
+Gemini preguntó: "¿no deberían ser 520 kbps solo de headers si el servidor
+envía a 100 Hz?" — Esa cifra asume que el servidor manda un paquete por
+cliente por tick (100Hz), lo que solo ocurriría con snapshots de HeroState
+activos. Sin lógica de juego, la frecuencia de salida real es 1 Hz (heartbeat).
+
+En producción (con serialización de HeroState a 60 Hz) el valor esperado sería
+~10-50 kbps dependiendo del número de clientes y tamaño del snapshot.
 
 ---
 
@@ -68,9 +78,24 @@ Número total de reenvíos de paquetes fiables (canal `Reliable` y
 
 Los inputs de los bots usan el canal `Unreliable` (fire and forget), así que
 este contador solo sube si el servidor envía paquetes fiables a los clientes
-(ej: ConnectionAccepted, ítems comprados, confirmaciones de nivel). En los
-benchmarks actuales siempre es 0 porque no hay lógica de juego que use el
-canal fiable.
+(ej: ConnectionAccepted, ítems comprados, confirmaciones de nivel).
+
+**Por qué Retrans: 0 incluso con 5% de pérdida (Scenario B):**
+El único paquete fiable enviado durante el benchmark es `ConnectionAccepted`.
+Una vez que el bot recibe `ConnectionAccepted` y envía su primer `Input`
+(con el ACK piggybacked en el header), el servidor procesa el ACK y elimina
+el `ConnectionAccepted` de la cola de reenvío. Con 50ms de delay (Scenario B),
+el ciclo completo es: envío → bot recibe (t+50ms) → bot envía Input (t+50ms)
+→ servidor recibe ACK (t+100ms). El timer de reenvío adaptativo es
+`RTT × 1.5 = 150ms`. El ACK llega antes de que expire el timer → cero retransmisiones.
+
+Para los 3 bots que fallaron el handshake (Lost: 3 en Scenario C): perdieron
+un paquete en un paso anterior al `ConnectionAccepted` y nunca se establecieron.
+`IncrementRetransmissions()` está correctamente instrumentado en `ResendPendingPackets()`.
+tc netem está aplicado sobre la interfaz `lo` (loopback), confirmado en el script.
+
+En producción, con ítems y confirmaciones usando el canal Reliable, este
+contador subirá bajo condiciones de pérdida.
 
 ---
 
@@ -78,13 +103,24 @@ canal fiable.
 `1 - (avg_bytes_sent_per_tick / kFullSyncBytesPerClient × connected_clients)`
 
 Compara el ancho de banda real enviado por tick con lo que costaría enviar un
-full sync completo a todos los clientes. Un 99% significa que el servidor envía
-el 1% de lo que un sistema sin delta compression enviaría.
+full sync completo de payload a todos los clientes. Un 99% significa que el
+servidor envía el 1% de lo que un sistema sin delta compression enviaría.
 
-**Nota:** en los benchmarks actuales el servidor solo envía heartbeats (sin
-snapshots de estado del héroe), por eso la eficiencia es siempre 99% — no hay
-casi nada que enviar. En producción, con snapshots de HeroState activos, la
-eficiencia esperada es 60-80% dependiendo del movimiento de los jugadores.
+**`kFullSyncBytesPerClient = 19`** (149 bits de payload redondeados a 19 bytes).
+Esta constante mide el ahorro en **payload** (datos del héroe), no en bytes
+totales de cable, porque el header (104 bits = 13 bytes) es overhead fijo
+presente tanto en full-sync como en delta-sync — incluirlo en la baseline
+distorsionaría la métrica de compresión.
+
+**Por qué 99% en los benchmarks:**
+Sin snapshots de HeroState activos, el servidor envía solo heartbeats (header
+sin payload). El numerador `avg_bytes_sent_per_tick` es ~0.13 bytes/tick
+(`13 bytes × 47 clientes × 1 hb/s / 100 Hz`), mientras que el denominador
+teórico es `19 × 47 ≈ 893 bytes/tick`. Resultado: 99.9% redondeado a 99%.
+
+Este valor es una **cota superior esperada** para el benchmark sin juego.
+En producción, con HeroState activo y jugadores moviéndose continuamente,
+la eficiencia esperada es 60-80%.
 
 ---
 
