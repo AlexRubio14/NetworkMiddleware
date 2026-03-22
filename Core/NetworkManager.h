@@ -48,6 +48,11 @@ namespace NetworkMiddleware::Core {
         static constexpr uint8_t              kMaxRetries       = 10;
         static constexpr std::chrono::milliseconds kResendInterval{100};
 
+        // P-3.6 Session Recovery timing constants (easy to change)
+        static constexpr std::chrono::seconds kHeartbeatInterval{1};   // Send heartbeat after 1s of silence
+        static constexpr std::chrono::seconds kSessionTimeout{10};     // Mark zombie after 10s no incoming
+        static constexpr std::chrono::seconds kZombieDuration{120};    // Remove zombie after 120s
+
     private:
         std::shared_ptr<Shared::ITransport>         m_transport;
         OnDataReceivedCallback                       m_onDataReceived;
@@ -65,7 +70,7 @@ namespace NetworkMiddleware::Core {
         void HandleChallengeResponse(Shared::BitReader& reader, const Shared::EndPoint& sender);
         void SendHeaderOnly(Shared::PacketType type, const Shared::EndPoint& to);
         void SendChallenge(const Shared::EndPoint& to, uint64_t salt);
-        void SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID);
+
 
         // P-3.3 Reliability Layer
         void ProcessAcks(RemoteClient& client, const Shared::PacketHeader& header);
@@ -75,6 +80,11 @@ namespace NetworkMiddleware::Core {
                                    const Shared::EndPoint& sender, size_t totalBits,
                                    const Shared::PacketHeader& header);
         void DeliverBufferedReliable(RemoteClient& client, const Shared::EndPoint& sender);
+
+        // P-3.6 Session Recovery
+        void HandleDisconnect(const Shared::EndPoint& sender);
+        void HandleReconnectionRequest(Shared::BitReader& reader, const Shared::EndPoint& sender);
+        void SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token);
 
     public:
         explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport);
@@ -92,11 +102,22 @@ namespace NetworkMiddleware::Core {
 
         void Update();
 
+        // P-3.6: Checks heartbeat / session timeout / zombie expiry for all clients.
+        // Exposed with explicit `now` parameter for deterministic unit testing.
+        // Update() calls this internally with steady_clock::now().
+        void ProcessSessionKeepAlive(std::chrono::steady_clock::time_point now);
+
         // Devuelve las métricas de red del cliente (para Brain, P-3.4).
         // Retorna nullopt si el endpoint no corresponde a un cliente establecido.
         std::optional<ClientNetworkStats> GetClientNetworkStats(const Shared::EndPoint& ep) const;
 
         size_t GetEstablishedCount() const { return m_establishedClients.size(); }
         size_t GetPendingCount()     const { return m_pendingClients.size(); }
+
+        // Returns true if the client at `ep` is in zombie state (timed out, awaiting reconnection).
+        bool IsClientZombie(const Shared::EndPoint& ep) const {
+            const auto it = m_establishedClients.find(ep);
+            return it != m_establishedClients.end() && it->second.isZombie;
+        }
     };
 }

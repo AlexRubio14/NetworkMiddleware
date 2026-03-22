@@ -18,8 +18,9 @@ status: pending-gemini-validation
 - **ZigZagEncode / ZigZagDecode** en `NetworkOptimizer` — mapea enteros firmados a unsigned para que los deltas pequeños (positivos o negativos) generen valores VLE de 1 byte
 - **SnapshotHistory** en `RemoteClient` — buffer circular de 64 slots (`seq % 64`), `RecordSnapshot` guarda el estado, `GetBaseline` lo recupera o devuelve `nullptr` (señal de full sync)
 - **`HeroSerializer::SerializeDelta` / `DeserializeDelta`** — protocolo de delta con inline dirty bits + ZigZag+VLE por campo; sin cambios = 38 bits, posición sola ≈ 54 bits
-- **20 tests nuevos** en `DeltaCompressionTests.cpp`: ZigZag math, round-trips de todos los campos, eficiencia demostrada, evicción del buffer circular
-- **Total: 92 tests, 100% passing** (Windows/MSVC)
+- **22 tests nuevos** en `DeltaCompressionTests.cpp`: ZigZag math, round-trips de todos los campos, eficiencia demostrada, evicción del buffer circular, detección de movimiento 2cm (16-bit), identidad mismatch rechazada
+- **POS_BITS subido de 14 → 16 bits** tras revisión CodeRabbit: precisión 1.53cm (antes 6.1cm), full sync 149 bits (antes 145)
+- **Total: 94 tests, 100% passing** (Windows/MSVC)
 
 ---
 
@@ -115,18 +116,21 @@ TEST(SerializeDelta, AllFieldsChanged_FewerBitsThanFullSync) {
 | Suite | Tests | Escenarios cubiertos |
 |-------|-------|----------------------|
 | `ZigZag` | 7 | Encode 0/±1/±2, round-trip valores varios, negativos → unsigned pequeño |
-| `SerializeDelta` | 9 | Sin cambios (38 bits), salud +/-, posición, todos los campos, stateFlags, eficiencia vs full sync |
+| `SerializeDelta` | 11 | Sin cambios (38 bits), salud +/-, posición, todos los campos, stateFlags, eficiencia vs full sync, detección de movimiento 2cm, identidad mismatch rechazada |
 | `SnapshotHistory` | 4 | Record+retrieve, seq desconocido → nullptr, evicción circular (seq=0 evicted por seq=64), contrato full sync |
 
 ---
 
 ## Eficiencia de bits demostrada
 
+> **Nota:** POS_BITS fue subido de 14 → **16 bits** tras revisión de CodeRabbit (precisión 1.53cm vs 6.1cm).
+> Los valores de Full Sync reflejan el estado final del código.
+
 | Escenario | Full sync | Delta | Ahorro |
 |-----------|-----------|-------|--------|
 | Sin cambios | 64 bits (mask vacía) | **38 bits** | ~41% |
-| Solo posición (delta pequeño) | 92 bits | **~54 bits** | ~41% |
-| Todos los campos (deltas pequeños) | 145 bits | **~91 bits** | ~37% |
+| Solo posición (delta pequeño) | **96 bits** | **~54 bits** | ~44% |
+| Todos los campos (deltas pequeños) | **149 bits** | **~91 bits** | ~39% |
 
 ---
 
@@ -147,8 +151,8 @@ TEST(SerializeDelta, AllFieldsChanged_FewerBitsThanFullSync) {
 ## Resultado local
 
 ```text
-100% tests passed, 0 tests failed out of 92
-Total Test time (real) = 1.75 sec
+100% tests passed, 0 tests failed out of 94
+Total Test time (real) = 0.02 sec
 Platform: Windows / MSVC 19.44
 ```
 
@@ -156,9 +160,9 @@ Platform: Windows / MSVC 19.44
 
 ## Estado actual del sistema
 
-- 92 tests verdes localmente (Windows/MSVC)
-- PR abierta: `Delta-Compression` → `develop`
-- CI en ejecución (Ubuntu + Windows)
+- 94 tests verdes localmente (Windows/MSVC)
+- PR mergeada: `Delta-Compression` → `develop` ✅
+- CI verde (Ubuntu + Windows) ✅
 
 ## Siguiente propuesta sugerida
 

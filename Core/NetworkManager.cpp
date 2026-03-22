@@ -31,14 +31,17 @@ namespace NetworkMiddleware::Core {
         // 2. Expirar handshakes sin respuesta (> 5 segundos)
         CheckTimeouts();
 
-        // 3. Recibir un paquete del transporte
+        // 3. Heartbeat keepalive + session timeout + zombie expiry
+        ProcessSessionKeepAlive(std::chrono::steady_clock::now());
+
+        // 4. Recibir un paquete del transporte
         auto buffer = std::make_shared<std::vector<uint8_t>>();
         Shared::EndPoint sender;
 
         if (!m_transport->Receive(*buffer, sender))
             return;
 
-        // 4. Validar tamaño mínimo del header
+        // 5. Validar tamaño mínimo del header
         constexpr size_t kHeaderBytes = Shared::PacketHeader::kByteCount;
         if (buffer->size() < kHeaderBytes) {
             Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
@@ -46,7 +49,7 @@ namespace NetworkMiddleware::Core {
             return;
         }
 
-        // 5. Parsear el header de P-3.1
+        // 6. Parsear el header de P-3.1
         Shared::BitReader reader(*buffer, buffer->size() * 8);
         const Shared::PacketHeader header = Shared::PacketHeader::Read(reader);
 
@@ -57,7 +60,7 @@ namespace NetworkMiddleware::Core {
                 static_cast<uint32_t>(header.flags),
                 header.timestamp));
 
-        // 6. Máquina de estados — enrutar según tipo de paquete
+        // 7. Máquina de estados — enrutar según tipo de paquete
         const auto type = static_cast<Shared::PacketType>(header.type);
 
         switch (type) {
@@ -69,10 +72,31 @@ namespace NetworkMiddleware::Core {
                 HandleChallengeResponse(reader, sender);
                 break;
 
+            case Shared::PacketType::ReconnectionRequest:
+                HandleReconnectionRequest(reader, sender);
+                break;
+
             default:
                 // Un solo find() (CodeRabbit fix): no double-lookup con contains() + at()
                 if (auto it = m_establishedClients.find(sender); it != m_establishedClients.end()) {
                     auto& client = it->second;
+
+                    // Registrar tiempo de llegada (P-3.6 keepalive).
+                    client.lastIncomingTime = std::chrono::steady_clock::now();
+
+                    // Zombie: actualizar timing pero no procesar paquetes de juego.
+                    // El cliente debe reconectarse via ReconnectionRequest.
+                    if (client.isZombie) {
+                        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                            std::format("Paquete de cliente zombie ignorado: {}", sender.ToString()));
+                        break;
+                    }
+
+                    // Graceful disconnect: el cliente cierra limpiamente.
+                    if (type == Shared::PacketType::Disconnect) {
+                        HandleDisconnect(sender);
+                        break;
+                    }
 
                     // Detección de duplicados antes de actualizar el estado ACK.
                     // Usa seqContext.remoteAck + ackBits (misma aritmética modular int16_t).
@@ -119,6 +143,10 @@ namespace NetworkMiddleware::Core {
                             client.m_lastProcessedSeq            = header.sequence;
                             client.m_lastProcessedSeqInitialized = true;
                         }
+
+                        // Heartbeat: keepalive only — do not deliver to the game layer.
+                        if (type == Shared::PacketType::Heartbeat)
+                            break;
 
                         if (m_onDataReceived)
                             m_onDataReceived(header, reader, sender);
@@ -222,13 +250,21 @@ namespace NetworkMiddleware::Core {
 
         // Usar el NetworkID que se reservó en HandleConnectionRequest (no incrementar de nuevo)
         const uint16_t assignedID = pending.networkID;
-        m_establishedClients.emplace(sender, RemoteClient(sender, assignedID, 0));
+        const uint64_t token      = m_rng();
+
+        const auto now = std::chrono::steady_clock::now();
+        RemoteClient newClient(sender, assignedID, 0);
+        newClient.reconnectionToken = token;
+        newClient.lastIncomingTime  = now;
+        newClient.lastOutgoingTime  = now;
+
+        m_establishedClients.emplace(sender, std::move(newClient));
         m_pendingClients.erase(it);
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
             std::format("Cliente {} conectado. NetworkID={}", sender.ToString(), assignedID));
 
-        SendConnectionAccepted(sender, assignedID);
+        SendConnectionAccepted(sender, assignedID, token);
 
         if (m_onClientConnected)
             m_onClientConnected(assignedID, sender);
@@ -255,12 +291,12 @@ namespace NetworkMiddleware::Core {
         m_transport->Send(writer.GetCompressedData(), to);
     }
 
-    void NetworkManager::SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID) {
+    void NetworkManager::SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token) {
         Shared::BitWriter writer;
         Shared::PacketHeader header;
         header.type = static_cast<uint8_t>(Shared::PacketType::ConnectionAccepted);
         header.Write(writer);
-        Shared::ConnectionAcceptedPayload{networkID}.Write(writer);
+        Shared::ConnectionAcceptedPayload{networkID, token}.Write(writer);
         m_transport->Send(writer.GetCompressedData(), to);
     }
 
@@ -323,9 +359,11 @@ namespace NetworkMiddleware::Core {
             client.m_reliableSents.emplace(usedSeq, std::move(pending));
         }
 
-        // Registrar el instante de envío para RTT sampling (P-3.4).
+        // Registrar el instante de envío para RTT sampling (P-3.4) y keepalive (P-3.6).
         // usedSeq capturado antes de AdvanceLocal(), que es el seq escrito en el header.
-        client.m_rtt.sentTimes[usedSeq] = std::chrono::steady_clock::now();
+        const auto sendTime = std::chrono::steady_clock::now();
+        client.m_rtt.sentTimes[usedSeq] = sendTime;
+        client.lastOutgoingTime          = sendTime;
 
         client.seqContext.AdvanceLocal();
 
@@ -511,6 +549,133 @@ namespace NetworkMiddleware::Core {
             client.m_reliableReceiveBuffer.erase(it);
             ++client.m_nextExpectedReliableSeq;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // ProcessSessionKeepAlive — P-3.6
+    //
+    // Called every Update() with the current time. For each established client:
+    //   • Non-zombie: if no incoming for kSessionTimeout → mark as zombie.
+    //   • Non-zombie: if no outgoing for kHeartbeatInterval → send heartbeat.
+    //   • Zombie: if zombie duration > kZombieDuration → remove + disconnect callback.
+    // -------------------------------------------------------------------------
+    void NetworkManager::ProcessSessionKeepAlive(std::chrono::steady_clock::time_point now) {
+        std::vector<Shared::EndPoint> toExpire;
+
+        for (auto& [endpoint, client] : m_establishedClients) {
+            if (client.isZombie) {
+                if (now - client.zombieTime > kZombieDuration)
+                    toExpire.push_back(endpoint);
+                continue;
+            }
+
+            if (now - client.lastIncomingTime > kSessionTimeout) {
+                client.isZombie   = true;
+                client.zombieTime = now;
+                Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                    std::format("Sesión expirada: {} (NetworkID={}) → zombie. Ventana de reconexión: {}s",
+                        endpoint.ToString(), client.networkID,
+                        static_cast<int>(kZombieDuration.count())));
+                continue;
+            }
+
+            if (now - client.lastOutgoingTime > kHeartbeatInterval)
+                Send(endpoint, {}, Shared::PacketType::Heartbeat);
+        }
+
+        for (const auto& ep : toExpire) {
+            auto it = m_establishedClients.find(ep);
+            if (it == m_establishedClients.end()) continue;
+
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("Zombie expirado: {} (NetworkID={}) eliminado tras {}s",
+                    ep.ToString(), it->second.networkID,
+                    static_cast<int>(kZombieDuration.count())));
+
+            if (m_onClientDisconnected)
+                m_onClientDisconnected(it->second.networkID, ep);
+
+            m_establishedClients.erase(it);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // HandleDisconnect — P-3.6
+    //
+    // Graceful disconnect: the client explicitly closes the session.
+    // Fires the disconnect callback and removes the client immediately.
+    // -------------------------------------------------------------------------
+    void NetworkManager::HandleDisconnect(const Shared::EndPoint& sender) {
+        auto it = m_establishedClients.find(sender);
+        if (it == m_establishedClients.end()) return;
+
+        const uint16_t networkID = it->second.networkID;
+
+        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+            std::format("Graceful disconnect: {} (NetworkID={})", sender.ToString(), networkID));
+
+        if (m_onClientDisconnected)
+            m_onClientDisconnected(networkID, sender);
+
+        m_establishedClients.erase(it);
+    }
+
+    // -------------------------------------------------------------------------
+    // HandleReconnectionRequest — P-3.6
+    //
+    // A zombie client presents its networkID + reconnection token from a
+    // potentially new endpoint. On success, the client is moved to the new
+    // endpoint, un-zombied, and a ConnectionAccepted is sent with the same token.
+    // On failure, ConnectionDenied is sent.
+    // -------------------------------------------------------------------------
+    void NetworkManager::HandleReconnectionRequest(Shared::BitReader& reader,
+                                                   const Shared::EndPoint& sender) {
+        const auto req = Shared::ReconnectionRequestPayload::Read(reader);
+
+        // Find a zombie client with the matching networkID
+        auto it = std::find_if(m_establishedClients.begin(), m_establishedClients.end(),
+            [&](const auto& entry) {
+                return entry.second.networkID == req.oldNetworkID && entry.second.isZombie;
+            });
+
+        if (it == m_establishedClients.end()) {
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("ReconnectionRequest: NetworkID={} no encontrado o no zombie — rechazado",
+                    req.oldNetworkID));
+            SendHeaderOnly(Shared::PacketType::ConnectionDenied, sender);
+            return;
+        }
+
+        if (it->second.reconnectionToken != req.reconnectionToken) {
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("ReconnectionRequest: token incorrecto para NetworkID={} — rechazado",
+                    req.oldNetworkID));
+            SendHeaderOnly(Shared::PacketType::ConnectionDenied, sender);
+            return;
+        }
+
+        // Valid reconnection: move client to new endpoint
+        RemoteClient client     = std::move(it->second);
+        m_establishedClients.erase(it);
+
+        const auto now          = std::chrono::steady_clock::now();
+        client.endpoint         = sender;
+        client.isZombie         = false;
+        client.lastIncomingTime = now;
+        client.lastOutgoingTime = now;
+
+        const uint16_t networkID = client.networkID;
+        const uint64_t token     = client.reconnectionToken;
+
+        m_establishedClients.emplace(sender, std::move(client));
+
+        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+            std::format("Reconexión exitosa: NetworkID={} → {}", networkID, sender.ToString()));
+
+        SendConnectionAccepted(sender, networkID, token);
+
+        if (m_onClientConnected)
+            m_onClientConnected(networkID, sender);
     }
 
     // -------------------------------------------------------------------------
