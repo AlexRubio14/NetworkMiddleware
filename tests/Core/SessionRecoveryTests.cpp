@@ -266,6 +266,35 @@ TEST(SessionRecovery, Reconnect_NonZombieNetworkID_Rejected) {
     EXPECT_FALSE(nm.GetClientNetworkStats(newEp).has_value());
 }
 
+TEST(SessionRecovery, Reconnect_SameEndpoint_Succeeds) {
+    // Regression: a zombie client that hasn't changed IP/port must be able to
+    // reconnect via ReconnectionRequest (same endpoint == just re-activating the slot).
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    const EndPoint ep = MakeEndpoint(0x0100007F, 9000);
+
+    auto [networkID, token] = CompleteHandshake(*t, nm, ep);
+
+    // Force zombie
+    nm.ProcessSessionKeepAlive(std::chrono::steady_clock::now() + std::chrono::seconds(11));
+    ASSERT_TRUE(nm.IsClientZombie(ep));
+    t->sentPackets.clear();
+
+    // Reconnect from the SAME endpoint — must succeed
+    t->InjectPacket(MakeReconnectionRequestPacket(networkID, token), ep);
+    nm.Update();
+
+    EXPECT_EQ(nm.GetEstablishedCount(), 1u);
+    EXPECT_FALSE(nm.IsClientZombie(ep));
+
+    // Must have sent ConnectionAccepted (not ConnectionDenied)
+    ASSERT_GE(t->sentPackets.size(), 1u);
+    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto h = PacketHeader::Read(r);
+    EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionAccepted);
+}
+
 TEST(SessionRecovery, Reconnect_OccupiedEndpoint_Rejected) {
     // If another active client already occupies the new endpoint,
     // the reconnection must be rejected without corrupting either session.

@@ -1,5 +1,5 @@
 ﻿#pragma once
 
  namespace NetworkMiddleware::Shared {
-    enum class LogLevel { Info, Debug, Warning, Error, Packet };
+    enum class LogLevel { Info, Success, Debug, Warning, Error, Packet };
 }

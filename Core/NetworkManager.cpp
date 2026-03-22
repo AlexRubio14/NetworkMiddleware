@@ -31,133 +31,134 @@ namespace NetworkMiddleware::Core {
         // 2. Expirar handshakes sin respuesta (> 5 segundos)
         CheckTimeouts();
 
-        // 3. Heartbeat keepalive + session timeout + zombie expiry
-        ProcessSessionKeepAlive(std::chrono::steady_clock::now());
-
-        // 4. Recibir un paquete del transporte
+        // 3. Recibir un paquete del transporte
         auto buffer = std::make_shared<std::vector<uint8_t>>();
         Shared::EndPoint sender;
 
-        if (!m_transport->Receive(*buffer, sender))
-            return;
+        if (m_transport->Receive(*buffer, sender)) {
+            // 4. Validar tamaño mínimo del header
+            constexpr size_t kHeaderBytes = Shared::PacketHeader::kByteCount;
+            if (buffer->size() >= kHeaderBytes) {
+                // 5. Parsear el header de P-3.1
+                Shared::BitReader reader(*buffer, buffer->size() * 8);
+                const Shared::PacketHeader header = Shared::PacketHeader::Read(reader);
 
-        // 5. Validar tamaño mínimo del header
-        constexpr size_t kHeaderBytes = Shared::PacketHeader::kByteCount;
-        if (buffer->size() < kHeaderBytes) {
-            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
-                std::format("Paquete descartado: {} bytes (mínimo {})", buffer->size(), kHeaderBytes));
-            return;
-        }
+                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                    std::format("PKT seq={} ack={} ack_bits={:#010x} type={:#x} flags={:#x} ts={}ms",
+                        header.sequence, header.ack, header.ack_bits,
+                        static_cast<uint32_t>(header.type),
+                        static_cast<uint32_t>(header.flags),
+                        header.timestamp));
 
-        // 6. Parsear el header de P-3.1
-        Shared::BitReader reader(*buffer, buffer->size() * 8);
-        const Shared::PacketHeader header = Shared::PacketHeader::Read(reader);
+                // 6. Máquina de estados — enrutar según tipo de paquete
+                const auto type = static_cast<Shared::PacketType>(header.type);
 
-        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-            std::format("PKT seq={} ack={} ack_bits={:#010x} type={:#x} flags={:#x} ts={}ms",
-                header.sequence, header.ack, header.ack_bits,
-                static_cast<uint32_t>(header.type),
-                static_cast<uint32_t>(header.flags),
-                header.timestamp));
-
-        // 7. Máquina de estados — enrutar según tipo de paquete
-        const auto type = static_cast<Shared::PacketType>(header.type);
-
-        switch (type) {
-            case Shared::PacketType::ConnectionRequest:
-                HandleConnectionRequest(sender);
-                break;
-
-            case Shared::PacketType::ChallengeResponse:
-                HandleChallengeResponse(reader, sender);
-                break;
-
-            case Shared::PacketType::ReconnectionRequest:
-                HandleReconnectionRequest(reader, sender);
-                break;
-
-            default:
-                // Un solo find() (CodeRabbit fix): no double-lookup con contains() + at()
-                if (auto it = m_establishedClients.find(sender); it != m_establishedClients.end()) {
-                    auto& client = it->second;
-
-                    // Registrar tiempo de llegada (P-3.6 keepalive).
-                    client.lastIncomingTime = std::chrono::steady_clock::now();
-
-                    // Zombie: actualizar timing pero no procesar paquetes de juego.
-                    // El cliente debe reconectarse via ReconnectionRequest.
-                    if (client.isZombie) {
-                        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-                            std::format("Paquete de cliente zombie ignorado: {}", sender.ToString()));
+                switch (type) {
+                    case Shared::PacketType::ConnectionRequest:
+                        HandleConnectionRequest(sender);
                         break;
-                    }
 
-                    // Graceful disconnect: el cliente cierra limpiamente.
-                    if (type == Shared::PacketType::Disconnect) {
-                        HandleDisconnect(sender);
+                    case Shared::PacketType::ChallengeResponse:
+                        HandleChallengeResponse(reader, sender);
                         break;
-                    }
 
-                    // Detección de duplicados antes de actualizar el estado ACK.
-                    // Usa seqContext.remoteAck + ackBits (misma aritmética modular int16_t).
-                    // m_seqInitialized evita falso-positivo cuando remoteAck=0 y seq=0 en el primer paquete.
-                    const bool isDuplicate = client.m_seqInitialized && [&]() -> bool {
-                        const int16_t diff = static_cast<int16_t>(
-                            client.seqContext.remoteAck - header.sequence);
-                        if (diff < 0)   return false;         // más nuevo que remoteAck → no es duplicado
-                        if (diff == 0)  return true;          // exactamente remoteAck → duplicado
-                        if (diff <= 32) return (client.seqContext.ackBits >> (diff - 1)) & 1u;
-                        return true;                          // fuera de la ventana de 32 → descartar
-                    }();
+                    case Shared::PacketType::ReconnectionRequest:
+                        HandleReconnectionRequest(reader, sender);
+                        break;
 
-                    client.seqContext.RecordReceived(header.sequence);
-                    client.m_seqInitialized = true;
-                    ProcessAcks(client, header);
+                    default:
+                        // Un solo find() (CodeRabbit fix): no double-lookup con contains() + at()
+                        if (auto it = m_establishedClients.find(sender); it != m_establishedClients.end()) {
+                            auto& client = it->second;
 
-                    if (isDuplicate) {
-                        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-                            std::format("Duplicado descartado: seq={} de {}", header.sequence, sender.ToString()));
-                    } else if (type == Shared::PacketType::Reliable) {
-                        HandleReliableOrdered(reader, client, sender, buffer->size() * 8, header);
-                    } else {
-                        // Filtro de paquetes Unreliable fuera de orden (P-3.4).
-                        // Solo Snapshot, Input y Heartbeat pasan por esta barrera.
-                        // Reliable y ReliableUnordered ya tienen su propio mecanismo de garantía.
-                        const bool isUnreliableChannel =
-                            (type == Shared::PacketType::Snapshot  ||
-                             type == Shared::PacketType::Input      ||
-                             type == Shared::PacketType::Heartbeat);
+                            // Registrar tiempo de llegada (P-3.6 keepalive).
+                            client.lastIncomingTime = std::chrono::steady_clock::now();
 
-                        if (isUnreliableChannel && client.m_lastProcessedSeqInitialized) {
-                            const int16_t diff = static_cast<int16_t>(
-                                header.sequence - client.m_lastProcessedSeq);
-                            if (diff <= 0) {
-                                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-                                    std::format("Unreliable fuera de orden descartado: seq={} lastProcessed={} de {}",
-                                        header.sequence, client.m_lastProcessedSeq, sender.ToString()));
+                            // Graceful disconnect: proceso ANTES del zombie guard.
+                            // Un cliente zombie puede desconectarse limpiamente (libera el slot).
+                            if (type == Shared::PacketType::Disconnect) {
+                                HandleDisconnect(sender);
                                 break;
                             }
+
+                            // Zombie: actualizar timing pero no procesar paquetes de juego.
+                            // El cliente debe reconectarse via ReconnectionRequest.
+                            if (client.isZombie) {
+                                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                                    std::format("Paquete de cliente zombie ignorado: {}", sender.ToString()));
+                                break;
+                            }
+
+                            // Detección de duplicados antes de actualizar el estado ACK.
+                            // Usa seqContext.remoteAck + ackBits (misma aritmética modular int16_t).
+                            // m_seqInitialized evita falso-positivo cuando remoteAck=0 y seq=0 en el primer paquete.
+                            const bool isDuplicate = client.m_seqInitialized && [&]() -> bool {
+                                const int16_t diff = static_cast<int16_t>(
+                                    client.seqContext.remoteAck - header.sequence);
+                                if (diff < 0)   return false;         // más nuevo que remoteAck → no es duplicado
+                                if (diff == 0)  return true;          // exactamente remoteAck → duplicado
+                                if (diff <= 32) return (client.seqContext.ackBits >> (diff - 1)) & 1u;
+                                return true;                          // fuera de la ventana de 32 → descartar
+                            }();
+
+                            client.seqContext.RecordReceived(header.sequence);
+                            client.m_seqInitialized = true;
+                            ProcessAcks(client, header);
+
+                            if (isDuplicate) {
+                                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                                    std::format("Duplicado descartado: seq={} de {}", header.sequence, sender.ToString()));
+                            } else if (type == Shared::PacketType::Reliable) {
+                                HandleReliableOrdered(reader, client, sender, buffer->size() * 8, header);
+                            } else {
+                                // Filtro de paquetes Unreliable fuera de orden (P-3.4).
+                                // Solo Snapshot, Input y Heartbeat pasan por esta barrera.
+                                // Reliable y ReliableUnordered ya tienen su propio mecanismo de garantía.
+                                const bool isUnreliableChannel =
+                                    (type == Shared::PacketType::Snapshot  ||
+                                     type == Shared::PacketType::Input      ||
+                                     type == Shared::PacketType::Heartbeat);
+
+                                if (isUnreliableChannel && client.m_lastProcessedSeqInitialized) {
+                                    const int16_t diff = static_cast<int16_t>(
+                                        header.sequence - client.m_lastProcessedSeq);
+                                    if (diff <= 0) {
+                                        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+                                            std::format("Unreliable fuera de orden descartado: seq={} lastProcessed={} de {}",
+                                                header.sequence, client.m_lastProcessedSeq, sender.ToString()));
+                                        break;
+                                    }
+                                }
+
+                                if (isUnreliableChannel) {
+                                    client.m_lastProcessedSeq            = header.sequence;
+                                    client.m_lastProcessedSeqInitialized = true;
+                                }
+
+                                // Heartbeat: keepalive only — do not deliver to the game layer.
+                                if (type == Shared::PacketType::Heartbeat)
+                                    break;
+
+                                if (m_onDataReceived)
+                                    m_onDataReceived(header, reader, sender);
+                            }
+
+                        } else {
+                            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                                std::format("Paquete de cliente no autenticado: {}", sender.ToString()));
                         }
-
-                        if (isUnreliableChannel) {
-                            client.m_lastProcessedSeq            = header.sequence;
-                            client.m_lastProcessedSeqInitialized = true;
-                        }
-
-                        // Heartbeat: keepalive only — do not deliver to the game layer.
-                        if (type == Shared::PacketType::Heartbeat)
-                            break;
-
-                        if (m_onDataReceived)
-                            m_onDataReceived(header, reader, sender);
-                    }
-
-                } else {
-                    Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
-                        std::format("Paquete de cliente no autenticado: {}", sender.ToString()));
+                        break;
                 }
-                break;
+            } else {
+                Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                    std::format("Paquete descartado: {} bytes (mínimo {})", buffer->size(), kHeaderBytes));
+            }
         }
+
+        // 7. Heartbeat keepalive + session timeout + zombie expiry.
+        // Runs AFTER Receive() so a packet arriving just before the timeout threshold
+        // updates lastIncomingTime before the zombie check runs.
+        ProcessSessionKeepAlive(std::chrono::steady_clock::now());
     }
 
     // -------------------------------------------------------------------------
@@ -579,8 +580,13 @@ namespace NetworkMiddleware::Core {
                 continue;
             }
 
-            if (now - client.lastOutgoingTime > kHeartbeatInterval)
+            if (now - client.lastOutgoingTime > kHeartbeatInterval) {
                 Send(endpoint, {}, Shared::PacketType::Heartbeat);
+                // Override with injected clock so deterministic tests work correctly.
+                // Send() sets lastOutgoingTime to wall-clock; we overwrite it here
+                // with the synthetic 'now' so the test's time model stays consistent.
+                client.lastOutgoingTime = now;
+            }
         }
 
         for (const auto& ep : toExpire) {
@@ -654,10 +660,12 @@ namespace NetworkMiddleware::Core {
             return;
         }
 
-        // Guard: if the new endpoint is already occupied by another active client,
+        // Guard: if the new endpoint is already occupied by ANOTHER active client,
         // reject the reconnection. We must check BEFORE erasing the zombie entry
         // to avoid losing the session if emplace would silently fail (map semantics).
-        if (m_establishedClients.contains(sender)) {
+        // sender == it->first means same-endpoint reconnect — the zombie entry IS
+        // the slot we're about to replace, so no collision.
+        if (sender != it->first && m_establishedClients.contains(sender)) {
             Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
                 std::format("ReconnectionRequest: endpoint {} ya está ocupado — rechazado",
                     sender.ToString()));
