@@ -2,6 +2,7 @@
 #include "NetworkOptimizer.h"
 #include "../Gameplay/HeroDirtyBits.h"
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 
 namespace NetworkMiddleware::Shared::Network {
@@ -89,6 +90,9 @@ namespace NetworkMiddleware::Shared::Network {
     void HeroSerializer::SerializeDelta(const Data::HeroState& current,
                                         const Data::HeroState& baseline,
                                         BitWriter& writer) {
+        assert(current.networkID == baseline.networkID &&
+               "SerializeDelta: current and baseline must belong to the same hero");
+
         // Identity (always present so the receiver knows which hero this is)
         writer.WriteBits(current.networkID, 32);
 
@@ -138,7 +142,9 @@ namespace NetworkMiddleware::Shared::Network {
         outState           = baseline;
         outState.dirtyMask = 0; // rebuild from received flags only; never inherit baseline's stale mask
 
-        outState.networkID = reader.ReadBits(32);
+        const uint32_t nid = reader.ReadBits(32);
+        if (nid != baseline.networkID) return; // wrong baseline supplied — reject silently
+        outState.networkID = nid;
 
         constexpr int32_t kMaxQ = static_cast<int32_t>((1u << POS_BITS) - 1);
 

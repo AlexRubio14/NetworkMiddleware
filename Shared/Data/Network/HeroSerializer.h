@@ -30,6 +30,6 @@ namespace NetworkMiddleware::Shared::Network {
     private:
         static constexpr float MAP_MIN  = -500.0f;
         static constexpr float MAP_MAX  =  500.0f;
-        static constexpr int   POS_BITS = 14;
+        static constexpr int   POS_BITS = 16; // 1.53cm precision over 1000m
     };
 }

@@ -128,7 +128,7 @@ TEST(SerializeDelta, PositionChanged_RoundTrip) {
     HeroState result;
     HeroSerializer::DeserializeDelta(result, baseline, r);
 
-    const float kMaxError = 1000.0f / ((1u << 14) - 1);
+    const float kMaxError = 1000.0f / ((1u << 16) - 1);
     EXPECT_NEAR(result.x, current.x, kMaxError);
     EXPECT_NEAR(result.y, current.y, kMaxError);
     EXPECT_EQ(result.health, baseline.health); // unchanged
@@ -183,7 +183,7 @@ TEST(SerializeDelta, AllFieldsChanged_RoundTrip) {
     HeroState result;
     HeroSerializer::DeserializeDelta(result, baseline, r);
 
-    const float kMaxError = 1000.0f / ((1u << 14) - 1);
+    const float kMaxError = 1000.0f / ((1u << 16) - 1);
     EXPECT_NEAR(result.x,       current.x,       kMaxError);
     EXPECT_NEAR(result.y,       current.y,       kMaxError);
     EXPECT_EQ(result.health,    current.health);
@@ -251,4 +251,55 @@ TEST(SnapshotHistory, NullptrBaseline_ImpliesFullSync) {
     RemoteClient client;
     EXPECT_EQ(client.GetBaseline(999u), nullptr);
     // Caller would detect nullptr and call HeroSerializer::Serialize (full sync)
+}
+
+// ─── 16-bit precision: 2cm movement detection ────────────────────────────────
+
+TEST(SerializeDelta, TwoCmMove_DetectedAndSerialized) {
+    // With 14 bits over 1000m: step ≈ 6.1cm → 2cm rounds to 0 → NOT detected.
+    // With 16 bits over 1000m: step ≈ 1.53cm → 2cm rounds to ~1 step → detected.
+    HeroState baseline = MakeBaseline(); // x = 100.0f
+    HeroState current  = baseline;
+    current.x = 100.02f; // +2 cm
+
+    BitWriter w;
+    HeroSerializer::SerializeDelta(current, baseline, w);
+
+    // packet must be larger than the 38-bit no-change minimum
+    EXPECT_GT(w.GetBitCount(), 38u);
+
+    // round-trip must recover the position within 16-bit precision
+    auto data = w.GetCompressedData();
+    BitReader r(data, w.GetBitCount());
+    HeroState result;
+    HeroSerializer::DeserializeDelta(result, baseline, r);
+
+    const float kStep = 1000.0f / ((1u << 16) - 1); // ≈ 1.53 cm
+    EXPECT_NEAR(result.x, current.x, kStep);
+}
+
+// ─── Identity validation ──────────────────────────────────────────────────────
+
+TEST(SerializeDelta, Identity_Mismatch_DeserializeDelta_Rejected) {
+    // Serialize a delta for hero 7.
+    HeroState baseline = MakeBaseline(); // networkID = 7
+    HeroState current  = baseline;
+    current.health = 400.0f;
+
+    BitWriter w;
+    HeroSerializer::SerializeDelta(current, baseline, w);
+
+    // Attempt to deserialize against a baseline for a different hero (ID 99).
+    HeroState wrongBaseline  = MakeBaseline();
+    wrongBaseline.networkID  = 99u;
+    wrongBaseline.health     = 200.0f;
+
+    HeroState result = wrongBaseline;
+    auto data = w.GetCompressedData();
+    BitReader r(data, w.GetBitCount());
+    HeroSerializer::DeserializeDelta(result, wrongBaseline, r);
+
+    // Packet must be rejected: dirtyMask stays 0, no fields applied.
+    EXPECT_EQ(result.dirtyMask, 0u);
+    EXPECT_EQ(result.health, wrongBaseline.health);
 }
