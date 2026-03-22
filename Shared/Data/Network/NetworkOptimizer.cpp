@@ -69,4 +69,14 @@ namespace NetworkMiddleware::Shared::Network {
                    ((value >> 8) & 0xff00) |
                    ((value << 24) & 0xff000000);
     }
+
+    uint32_t NetworkOptimizer::ZigZagEncode(int32_t n) {
+        // Portable: avoids implementation-defined signed right-shift.
+        // n < 0 produces the all-ones mask (0xFFFFFFFF), n >= 0 produces 0.
+        return (static_cast<uint32_t>(n) << 1) ^ (n < 0 ? ~0u : 0u);
+    }
+
+    int32_t NetworkOptimizer::ZigZagDecode(uint32_t n) {
+        return static_cast<int32_t>((n >> 1) ^ (~(n & 1) + 1));
+    }
 }

@@ -44,5 +44,20 @@ namespace NetworkMiddleware::Shared::Network {
          * Swaps the byte order of a 32-bit integer.
          */
         static uint32_t SwapEndian(uint32_t value);
+
+        // --- Zig-Zag Encoding ---
+
+        /**
+         * Maps signed integers to unsigned so that small absolute values
+         * (positive or negative) produce small unsigned values → efficient VLE.
+         * Formula: (n << 1) ^ (n >> 31)
+         */
+        static uint32_t ZigZagEncode(int32_t n);
+
+        /**
+         * Reverses ZigZagEncode.
+         * Formula: (n >> 1) ^ -(n & 1)
+         */
+        static int32_t ZigZagDecode(uint32_t n);
     };
 }

@@ -35,13 +35,13 @@ static HeroState MakeFullState() {
 
 // ─── Bit-count (thesis claim) ─────────────────────────────────────────────────
 
-TEST(HeroSerializer, FullState_BitCount_Is145) {
-    // networkID(32) + dirtyMask(32) + pos(14+14) + health VLE(16) +
-    // maxHealth VLE(16) + mana VLE(8) + level(5) + stateFlags(8) = 145
+TEST(HeroSerializer, FullState_BitCount_Is149) {
+    // networkID(32) + dirtyMask(32) + pos(16+16) + health VLE(16) +
+    // maxHealth VLE(16) + mana VLE(8) + level(5) + stateFlags(8) = 149
     HeroState s = MakeFullState();
     BitWriter w;
     HeroSerializer::Serialize(s, w);
-    EXPECT_EQ(w.GetBitCount(), 145u);
+    EXPECT_EQ(w.GetBitCount(), 149u);
 }
 
 // ─── Round-trips ─────────────────────────────────────────────────────────────
@@ -74,8 +74,8 @@ TEST(HeroSerializer, PositionOnly_RoundTrip) {
     BitWriter w;
     HeroSerializer::Serialize(src, w);
 
-    // networkID(32) + dirtyMask(32) + x(14) + y(14) = 92 bits
-    EXPECT_EQ(w.GetBitCount(), 92u);
+    // networkID(32) + dirtyMask(32) + x(16) + y(16) = 96 bits
+    EXPECT_EQ(w.GetBitCount(), 96u);
 
     HeroState dst;
     auto data = w.GetCompressedData();
@@ -84,17 +84,17 @@ TEST(HeroSerializer, PositionOnly_RoundTrip) {
 
     EXPECT_EQ(dst.networkID, 7u);
 
-    const float kMaxError = 1000.0f / ((1u << 14) - 1);
+    const float kMaxError = 1000.0f / ((1u << 16) - 1);
     EXPECT_NEAR(dst.x, src.x, kMaxError);
     EXPECT_NEAR(dst.y, src.y, kMaxError);
 }
 
 // ─── Position precision ───────────────────────────────────────────────────────
 
-TEST(HeroSerializer, Position_MaxError_Within6cm) {
-    // 14-bit quantization over 1000m range → max step ≈ 6.1cm
-    const float kMaxError = 1000.0f / ((1u << 14) - 1);
-    EXPECT_LT(kMaxError, 0.062f);
+TEST(HeroSerializer, Position_MaxError_Within2cm) {
+    // 16-bit quantization over 1000m range → max step ≈ 1.53cm
+    const float kMaxError = 1000.0f / ((1u << 16) - 1);
+    EXPECT_LT(kMaxError, 0.016f);
 
     HeroState src;
     src.networkID = 1u;
