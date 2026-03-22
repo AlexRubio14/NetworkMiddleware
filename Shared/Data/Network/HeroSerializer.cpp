@@ -155,21 +155,21 @@ namespace NetworkMiddleware::Shared::Network {
             outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Position);
         }
 
-        // Health
+        // Health — clamp to [0, ∞): negative health is semantically invalid
         if (reader.ReadBits(1)) {
-            outState.health = baseline.health + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.health = std::max(0.0f, baseline.health + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader))));
             outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Health);
         }
 
         // MaxHealth
         if (reader.ReadBits(1)) {
-            outState.maxHealth = baseline.maxHealth + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.maxHealth = std::max(0.0f, baseline.maxHealth + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader))));
             outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::MaxHealth);
         }
 
         // Mana
         if (reader.ReadBits(1)) {
-            outState.mana = baseline.mana + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.mana = std::max(0.0f, baseline.mana + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader))));
             outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Mana);
         }
 
