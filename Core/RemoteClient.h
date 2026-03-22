@@ -109,20 +109,11 @@ namespace NetworkMiddleware::Core {
         std::array<SnapshotEntry, kHistorySize> m_history{};
 
         // Records a sent snapshot so it can later serve as a delta baseline.
-        void RecordSnapshot(uint16_t seq, const Shared::Data::HeroState& state) {
-            auto& entry = m_history[seq % kHistorySize];
-            entry.seq   = seq;
-            entry.valid = true;
-            entry.state = state;
-        }
+        void RecordSnapshot(uint16_t seq, const Shared::Data::HeroState& state);
 
         // Returns the stored state for seq, or nullptr if it has been evicted.
         // nullptr → caller must fall back to a full sync.
-        const Shared::Data::HeroState* GetBaseline(uint16_t seq) const {
-            const auto& entry = m_history[seq % kHistorySize];
-            if (!entry.valid || entry.seq != seq) return nullptr;
-            return &entry.state;
-        }
+        const Shared::Data::HeroState* GetBaseline(uint16_t seq) const;
     };
 
 }

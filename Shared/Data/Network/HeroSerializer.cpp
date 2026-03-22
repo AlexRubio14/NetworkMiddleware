@@ -1,6 +1,7 @@
 ﻿#include "HeroSerializer.h"
 #include "NetworkOptimizer.h"
 #include "../Gameplay/HeroDirtyBits.h"
+#include <algorithm>
 #include <cstdint>
 
 namespace NetworkMiddleware::Shared::Network {
@@ -134,38 +135,55 @@ namespace NetworkMiddleware::Shared::Network {
     void HeroSerializer::DeserializeDelta(Data::HeroState& outState,
                                           const Data::HeroState& baseline,
                                           BitReader& reader) {
-        outState = baseline; // start from baseline, apply deltas on top
+        outState           = baseline;
+        outState.dirtyMask = 0; // rebuild from received flags only; never inherit baseline's stale mask
 
         outState.networkID = reader.ReadBits(32);
 
-        // Position
+        constexpr int32_t kMaxQ = static_cast<int32_t>((1u << POS_BITS) - 1);
+
+        // Position — clamp result to valid quantized range before dequantizing
         if (reader.ReadBits(1)) {
-            const uint32_t qXb   = NetworkOptimizer::QuantizeFloat(baseline.x, MAP_MIN, MAP_MAX, POS_BITS);
-            const uint32_t qYb   = NetworkOptimizer::QuantizeFloat(baseline.y, MAP_MIN, MAP_MAX, POS_BITS);
-            const int32_t  dQx   = NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader));
-            const int32_t  dQy   = NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader));
-            outState.x = NetworkOptimizer::DequantizeFloat(static_cast<uint32_t>(static_cast<int32_t>(qXb) + dQx), MAP_MIN, MAP_MAX, POS_BITS);
-            outState.y = NetworkOptimizer::DequantizeFloat(static_cast<uint32_t>(static_cast<int32_t>(qYb) + dQy), MAP_MIN, MAP_MAX, POS_BITS);
+            const uint32_t qXb = NetworkOptimizer::QuantizeFloat(baseline.x, MAP_MIN, MAP_MAX, POS_BITS);
+            const uint32_t qYb = NetworkOptimizer::QuantizeFloat(baseline.y, MAP_MIN, MAP_MAX, POS_BITS);
+            const int32_t  dQx = NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader));
+            const int32_t  dQy = NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader));
+            const uint32_t qXr = static_cast<uint32_t>(std::clamp(static_cast<int32_t>(qXb) + dQx, 0, kMaxQ));
+            const uint32_t qYr = static_cast<uint32_t>(std::clamp(static_cast<int32_t>(qYb) + dQy, 0, kMaxQ));
+            outState.x = NetworkOptimizer::DequantizeFloat(qXr, MAP_MIN, MAP_MAX, POS_BITS);
+            outState.y = NetworkOptimizer::DequantizeFloat(qYr, MAP_MIN, MAP_MAX, POS_BITS);
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Position);
         }
 
         // Health
-        if (reader.ReadBits(1))
+        if (reader.ReadBits(1)) {
             outState.health = baseline.health + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Health);
+        }
 
         // MaxHealth
-        if (reader.ReadBits(1))
+        if (reader.ReadBits(1)) {
             outState.maxHealth = baseline.maxHealth + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::MaxHealth);
+        }
 
         // Mana
-        if (reader.ReadBits(1))
+        if (reader.ReadBits(1)) {
             outState.mana = baseline.mana + static_cast<float>(NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Mana);
+        }
 
-        // Level
-        if (reader.ReadBits(1))
-            outState.level = static_cast<uint32_t>(static_cast<int32_t>(baseline.level) + NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader)));
+        // Level — clamp to 5-bit domain [0, 31] to match full-sync wire format
+        if (reader.ReadBits(1)) {
+            const int32_t raw = static_cast<int32_t>(baseline.level) + NetworkOptimizer::ZigZagDecode(NetworkOptimizer::ReadVLE(reader));
+            outState.level = static_cast<uint32_t>(std::clamp(raw, 0, 31));
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::Level);
+        }
 
         // StateFlags
-        if (reader.ReadBits(1))
+        if (reader.ReadBits(1)) {
             outState.stateFlags = static_cast<uint8_t>(reader.ReadBits(8));
+            outState.dirtyMask |= (1u << (uint32_t)HeroDirtyBits::StateFlags);
+        }
     }
 }
