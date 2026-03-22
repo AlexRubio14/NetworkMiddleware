@@ -18,6 +18,7 @@ add_executable(MiddlewareTests
     Shared/DeltaCompressionTests.cpp
     Core/NetworkManagerTests.cpp
     Core/SessionRecoveryTests.cpp
+    Core/BotIntegrationTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE

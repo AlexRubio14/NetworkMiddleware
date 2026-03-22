@@ -15,6 +15,7 @@ if(NOT BUILD_TESTS)
     add_subdirectory(Transport)
     add_subdirectory(Brain)
     add_subdirectory(Server)
+    add_subdirectory(HeadlessBot)
 endif()
 
 if(BUILD_TESTS)
