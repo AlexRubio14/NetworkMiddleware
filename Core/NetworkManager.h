@@ -4,6 +4,7 @@
 #include "../Shared/Network/PacketTypes.h"
 #include "../Shared/Serialization/BitReader.h"
 #include "RemoteClient.h"
+#include "NetworkProfiler.h"
 #include <memory>
 #include <functional>
 #include <map>
@@ -43,7 +44,7 @@ namespace NetworkMiddleware::Core {
 
     class NetworkManager {
     public:
-        static constexpr uint16_t             kMaxClients       = 10;
+        static constexpr uint16_t             kMaxClients       = 100;
         static constexpr std::chrono::seconds kHandshakeTimeout{5};
         static constexpr uint8_t              kMaxRetries       = 10;
         static constexpr std::chrono::milliseconds kResendInterval{100};
@@ -58,6 +59,7 @@ namespace NetworkMiddleware::Core {
         OnDataReceivedCallback                       m_onDataReceived;
         OnClientConnectedCallback                    m_onClientConnected;
         OnClientDisconnectedCallback                 m_onClientDisconnected;
+        NetworkProfiler                              m_profiler;
 
         std::map<Shared::EndPoint, RemoteClient>     m_pendingClients;      // En handshake
         std::map<Shared::EndPoint, RemoteClient>     m_establishedClients;  // Conectados
@@ -114,10 +116,10 @@ namespace NetworkMiddleware::Core {
         size_t GetEstablishedCount() const { return m_establishedClients.size(); }
         size_t GetPendingCount()     const { return m_pendingClients.size(); }
 
+        // P-4.3: Access profiler snapshot (for embedding metrics in game loop).
+        NetworkProfiler::Snapshot GetProfilerSnapshot() const;
+
         // Returns true if the client at `ep` is in zombie state (timed out, awaiting reconnection).
-        bool IsClientZombie(const Shared::EndPoint& ep) const {
-            const auto it = m_establishedClients.find(ep);
-            return it != m_establishedClients.end() && it->second.isZombie;
-        }
+        bool IsClientZombie(const Shared::EndPoint& ep) const;
     };
 }

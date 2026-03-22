@@ -264,3 +264,79 @@ TEST(NetworkManager, Send_ToUnknownEndpoint_NoTransmit) {
 
     EXPECT_TRUE(t->sentPackets.empty());
 }
+
+// ─── P-4.3: While-drain ───────────────────────────────────────────────────────
+
+// A single Update() must drain ALL pending packets, not just one.
+// This validates the if→while fix in NetworkManager::Update().
+TEST(NetworkManager, WhileDrain_ProcessesAllPendingPacketsInOneUpdate) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    // Inject 3 ConnectionRequests from 3 distinct endpoints before any Update().
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0100007F, 9001));
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0200007F, 9002));
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0300007F, 9003));
+
+    // Single Update() — all 3 must be processed.
+    nm.Update();
+
+    // All 3 should now be in pending (waiting for ChallengeResponse).
+    EXPECT_EQ(nm.GetPendingCount(), 3u);
+}
+
+// ─── P-4.3: kMaxClients constant ─────────────────────────────────────────────
+
+TEST(NetworkManager, kMaxClients_IsOneHundred) {
+    EXPECT_EQ(NetworkManager::kMaxClients, 100u);
+}
+
+// ─── P-4.3: kMaxClients enforcement at ChallengeResponse ─────────────────────
+//
+// Scenario: server is at kMaxClients-1. Two clients both complete ConnectionRequest
+// (server was not full at that point, so both got a Challenge). They both send
+// their ChallengeResponse in the same Update() tick. Only the first should be
+// accepted; the second must be denied even though it had a valid salt.
+TEST(NetworkManager, ChallengeResponse_DeniedWhenServerFull) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    // Fill to kMaxClients - 1 using distinct endpoints.
+    for (uint16_t i = 0; i < NetworkManager::kMaxClients - 1; ++i) {
+        const EndPoint ep = MakeEndpoint(i + 1, static_cast<uint16_t>(9000 + i));
+        CompleteHandshake(*t, nm, ep);
+    }
+    ASSERT_EQ(nm.GetEstablishedCount(), NetworkManager::kMaxClients - 1);
+
+    // Two extra clients both send ConnectionRequest (server not yet full).
+    const EndPoint ep1 = MakeEndpoint(0xFFFE, 8001);
+    const EndPoint ep2 = MakeEndpoint(0xFFFF, 8002);
+
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep1);
+    nm.Update();
+    auto& c1Pkt = t->sentPackets.back().first;
+    BitReader cr1(c1Pkt, c1Pkt.size() * 8);
+    PacketHeader::Read(cr1);
+    const uint64_t salt1 = ChallengePayload::Read(cr1).salt;
+    t->sentPackets.clear();
+
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep2);
+    nm.Update();
+    auto& c2Pkt = t->sentPackets.back().first;
+    BitReader cr2(c2Pkt, c2Pkt.size() * 8);
+    PacketHeader::Read(cr2);
+    const uint64_t salt2 = ChallengePayload::Read(cr2).salt;
+    t->sentPackets.clear();
+
+    // Both respond in the same tick — server goes from kMaxClients-1 to kMaxClients
+    // after the first, and must deny the second.
+    t->InjectPacket(MakeChallengeResponsePacket(salt1), ep1);
+    t->InjectPacket(MakeChallengeResponsePacket(salt2), ep2);
+    nm.Update();
+
+    // Exactly kMaxClients established — one of the two was denied.
+    EXPECT_EQ(nm.GetEstablishedCount(), NetworkManager::kMaxClients);
+    const bool ep1Ok = nm.GetClientNetworkStats(ep1).has_value();
+    const bool ep2Ok = nm.GetClientNetworkStats(ep2).has_value();
+    EXPECT_NE(ep1Ok, ep2Ok);  // exactly one accepted, one denied
+}

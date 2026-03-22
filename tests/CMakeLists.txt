@@ -19,6 +19,7 @@ add_executable(MiddlewareTests
     Core/NetworkManagerTests.cpp
     Core/SessionRecoveryTests.cpp
     Core/BotIntegrationTests.cpp
+    Core/ProfilerTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE
