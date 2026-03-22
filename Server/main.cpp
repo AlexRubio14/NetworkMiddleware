@@ -337,8 +337,13 @@ int main() {
     Logger::Separator("Anti-hijack: bad token rejected");
     Pause(100);
 
-    // Zombie ep1New first
-    nm.ProcessSessionKeepAlive(std::chrono::steady_clock::now() + std::chrono::seconds(11));
+    // Capture the base time NOW so zombie + expiry share a consistent clock axis.
+    // zombieTime is set to (tAntiHijack + 11s) by ProcessSessionKeepAlive.
+    // The expiry check is: (now - zombieTime) > 120s.
+    // Using (tAntiHijack + 132s) guarantees: 132s - 11s = 121s > 120s. ✓
+    // Using now() + 121s independently would give: ~121s - 11s = 110s < 120s → fails.
+    const auto tAntiHijack = std::chrono::steady_clock::now();
+    nm.ProcessSessionKeepAlive(tAntiHijack + std::chrono::seconds(11));
     assert(nm.IsClientZombie(ep1New));
 
     const EndPoint attacker{0xFF000001, 8888};
@@ -361,8 +366,8 @@ int main() {
 
     bool expiryCalled = false;
     nm.SetClientDisconnectedCallback([&](uint16_t, const EndPoint&) { expiryCalled = true; });
-    // ep1New became zombie at ~now(). Advance 121s past that.
-    nm.ProcessSessionKeepAlive(std::chrono::steady_clock::now() + std::chrono::seconds(121));
+    // zombieTime = tAntiHijack + 11s. Advance to tAntiHijack + 132s → 132-11 = 121s > 120s.
+    nm.ProcessSessionKeepAlive(tAntiHijack + std::chrono::seconds(11 + 121));
     Logger::Sync();
 
     assert(expiryCalled);
