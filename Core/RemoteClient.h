@@ -114,6 +114,26 @@ namespace NetworkMiddleware::Core {
         // Returns the stored state for seq, or nullptr if it has been evicted.
         // nullptr → caller must fall back to a full sync.
         const Shared::Data::HeroState* GetBaseline(uint16_t seq) const;
+
+        // --- P-3.6 Session Recovery ---
+
+        // Random token issued in ConnectionAccepted; required for reconnection.
+        uint64_t reconnectionToken = 0;
+
+        // True when the session has timed out but the reconnection window is still open.
+        // The client can present its token to resume the session from any endpoint.
+        bool isZombie = false;
+
+        // Timestamp of the last packet received from this client.
+        // Default-initialized to epoch; always set explicitly before emplacing into m_establishedClients.
+        std::chrono::steady_clock::time_point lastIncomingTime{};
+
+        // Timestamp of the last packet sent to this client (used for heartbeat triggering).
+        // Default-initialized to epoch; always set explicitly before emplacing into m_establishedClients.
+        std::chrono::steady_clock::time_point lastOutgoingTime{};
+
+        // When the client transitioned to zombie state (for expiry calculation).
+        std::chrono::steady_clock::time_point zombieTime;
     };
 
 }

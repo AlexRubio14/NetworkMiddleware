@@ -18,6 +18,10 @@ namespace NetworkMiddleware::Shared {
         ChallengeResponse  = 0x8,  // Cliente → Servidor: eco del salt
         ConnectionAccepted = 0x9,  // Servidor → Cliente: NetworkID asignado (Welcome)
         ConnectionDenied   = 0xA,  // Servidor → Cliente: rechazo
+
+        // Session Recovery P-3.6
+        Disconnect          = 0xB,  // Cliente → Servidor: desconexión limpia
+        ReconnectionRequest = 0xC,  // Cliente → Servidor: reconexión con token
     };
 
     // Flags de control del paquete — 4 bits en el wire format.

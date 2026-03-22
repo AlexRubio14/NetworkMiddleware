@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "LogEntry.h"
 #include <queue>
 #include <mutex>
@@ -9,7 +9,10 @@
          static void ProcessLogs();
          static std::string GetLevelString(LogLevel level);
          static std::string GetChannelString(LogChannel channel);
+         static std::string GetLevelColor(LogLevel level);
+         static std::string GetLevelIcon(LogLevel level);
          static std::string FormatPacket(const std::vector<uint8_t>& data);
+         static void EnableAnsiOnWindows();
 
          inline static std::queue<LogEntry> m_logQueue;
          inline static std::mutex m_mutex;
@@ -20,8 +23,13 @@
      public:
          static void Start();
          static void Stop();
+         static void Sync();   // Block until all queued entries are flushed to stdout
 
          static void Log(LogLevel level, LogChannel channel, const std::string& msg);
          static void LogPacket(LogChannel channel, std::shared_ptr<std::vector<uint8_t>> data);
+
+         // Visual helpers — write directly to stdout (no queue)
+         static void Banner(const std::string& title);
+         static void Separator(const std::string& label = "");
      };
  }

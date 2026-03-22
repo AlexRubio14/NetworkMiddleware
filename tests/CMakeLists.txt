@@ -17,6 +17,7 @@ add_executable(MiddlewareTests
     Shared/HeroSerializerTests.cpp
     Shared/DeltaCompressionTests.cpp
     Core/NetworkManagerTests.cpp
+    Core/SessionRecoveryTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE
