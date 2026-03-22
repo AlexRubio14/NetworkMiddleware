@@ -111,8 +111,8 @@ El demo de Fase 3 se conserva en el historial de git y en los IR correspondiente
 
 | Métrica | Resultado |
 |---------|-----------|
-| Tests nuevos | 10 (8 Profiler + 2 NetworkManager) |
-| Tests totales | **119 / 119 passing** |
+| Tests nuevos | 12 (8 Profiler + 2 NetworkManager + 2 review fixes) |
+| Tests totales | **121 / 121 passing** |
 | Regresiones | 0 |
 | Compilación (MSVC Debug) | ✓ sin warnings |
 
