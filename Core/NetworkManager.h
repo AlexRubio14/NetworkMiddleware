@@ -117,14 +117,9 @@ namespace NetworkMiddleware::Core {
         size_t GetPendingCount()     const { return m_pendingClients.size(); }
 
         // P-4.3: Access profiler snapshot (for embedding metrics in game loop).
-        NetworkProfiler::Snapshot GetProfilerSnapshot() const {
-            return m_profiler.GetSnapshot(m_establishedClients.size());
-        }
+        NetworkProfiler::Snapshot GetProfilerSnapshot() const;
 
         // Returns true if the client at `ep` is in zombie state (timed out, awaiting reconnection).
-        bool IsClientZombie(const Shared::EndPoint& ep) const {
-            const auto it = m_establishedClients.find(ep);
-            return it != m_establishedClients.end() && it->second.isZombie;
-        }
+        bool IsClientZombie(const Shared::EndPoint& ep) const;
     };
 }

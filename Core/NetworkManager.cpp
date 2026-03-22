@@ -25,7 +25,7 @@ namespace NetworkMiddleware::Core {
     // m_nextNetworkID y m_rng.
     // -------------------------------------------------------------------------
     void NetworkManager::Update() {
-        const auto tickStart = std::chrono::high_resolution_clock::now();
+        const auto tickStart = std::chrono::steady_clock::now();
 
         // 1. Reintentar paquetes fiables no confirmados + detectar Link Loss
         ResendPendingPackets();
@@ -49,14 +49,9 @@ namespace NetworkMiddleware::Core {
                 Shared::BitReader reader(buffer, buffer.size() * 8);
                 const Shared::PacketHeader header = Shared::PacketHeader::Read(reader);
 
-                Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-                    std::format("PKT seq={} ack={} ack_bits={:#010x} type={:#x} flags={:#x} ts={}ms",
-                        header.sequence, header.ack, header.ack_bits,
-                        static_cast<uint32_t>(header.type),
-                        static_cast<uint32_t>(header.flags),
-                        header.timestamp));
-
                 // 6. Máquina de estados — enrutar según tipo de paquete
+                // NOTE: per-packet PKT log removed — at 50-100 bots × 60 Hz it
+                // enqueues 3k-6k entries/s and dominates the server's measured load.
                 const auto type = static_cast<Shared::PacketType>(header.type);
 
                 switch (type) {
@@ -167,7 +162,7 @@ namespace NetworkMiddleware::Core {
         ProcessSessionKeepAlive(std::chrono::steady_clock::now());
 
         // 8. P-4.3: Record tick time and emit profiler report every 5 seconds.
-        const auto tickEnd = std::chrono::high_resolution_clock::now();
+        const auto tickEnd = std::chrono::steady_clock::now();
         m_profiler.RecordTick(static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(tickEnd - tickStart).count()));
         m_profiler.MaybeReport(m_establishedClients.size());
@@ -261,6 +256,17 @@ namespace NetworkMiddleware::Core {
             return;
         }
 
+        // Re-check capacity: multiple pending clients can complete their handshake in the same
+        // tick (burst). HandleConnectionRequest only checked established size at Challenge time.
+        if (m_establishedClients.size() >= kMaxClients) {
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("Servidor lleno al confirmar handshake ({} clientes). Rechazando: {}",
+                    kMaxClients, sender.ToString()));
+            SendHeaderOnly(Shared::PacketType::ConnectionDenied, sender);
+            m_pendingClients.erase(it);
+            return;
+        }
+
         // Usar el NetworkID que se reservó en HandleConnectionRequest (no incrementar de nuevo)
         const uint16_t assignedID = pending.networkID;
         const uint64_t token      = m_rng();
@@ -292,7 +298,9 @@ namespace NetworkMiddleware::Core {
         Shared::PacketHeader header;
         header.type = static_cast<uint8_t>(type);
         header.Write(writer);
-        m_transport->Send(writer.GetCompressedData(), to);
+        const auto data = writer.GetCompressedData();
+        m_transport->Send(data, to);
+        m_profiler.RecordBytesSent(data.size());
     }
 
     void NetworkManager::SendChallenge(const Shared::EndPoint& to, uint64_t salt) {
@@ -301,7 +309,9 @@ namespace NetworkMiddleware::Core {
         header.type = static_cast<uint8_t>(Shared::PacketType::ConnectionChallenge);
         header.Write(writer);
         Shared::ChallengePayload{salt}.Write(writer);
-        m_transport->Send(writer.GetCompressedData(), to);
+        const auto data = writer.GetCompressedData();
+        m_transport->Send(data, to);
+        m_profiler.RecordBytesSent(data.size());
     }
 
     void NetworkManager::SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token) {
@@ -310,7 +320,9 @@ namespace NetworkMiddleware::Core {
         header.type = static_cast<uint8_t>(Shared::PacketType::ConnectionAccepted);
         header.Write(writer);
         Shared::ConnectionAcceptedPayload{networkID, token}.Write(writer);
-        m_transport->Send(writer.GetCompressedData(), to);
+        const auto data = writer.GetCompressedData();
+        m_transport->Send(data, to);
+        m_profiler.RecordBytesSent(data.size());
     }
 
     void NetworkManager::SetClientDisconnectedCallback(OnClientDisconnectedCallback callback) {
@@ -430,7 +442,9 @@ namespace NetworkMiddleware::Core {
                 for (uint8_t byte : pending.payload)
                     writer.WriteBits(byte, 8);
 
-                m_transport->Send(writer.GetCompressedData(), endpoint);
+                const auto retransmitData = writer.GetCompressedData();
+                m_transport->Send(retransmitData, endpoint);
+                m_profiler.RecordBytesSent(retransmitData.size());
                 m_profiler.IncrementRetransmissions();
 
                 pending.lastSentTime = now;
@@ -727,6 +741,15 @@ namespace NetworkMiddleware::Core {
             .clockOffset = rtt.clockOffset,
             .sampleCount = rtt.sampleCount,
         };
+    }
+
+    NetworkProfiler::Snapshot NetworkManager::GetProfilerSnapshot() const {
+        return m_profiler.GetSnapshot(m_establishedClients.size());
+    }
+
+    bool NetworkManager::IsClientZombie(const Shared::EndPoint& ep) const {
+        const auto it = m_establishedClients.find(ep);
+        return it != m_establishedClients.end() && it->second.isZombie;
     }
 
 }

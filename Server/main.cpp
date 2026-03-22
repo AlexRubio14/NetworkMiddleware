@@ -15,6 +15,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <format>
+#include <stdexcept>
 #include <thread>
 
 #include "../Core/NetworkManager.h"
@@ -49,10 +50,24 @@ int main() {
 
     // ── Transport ─────────────────────────────────────────────────────────────
 
-    const char* portEnv = std::getenv("SERVER_PORT");
-    const uint16_t port = portEnv
-        ? static_cast<uint16_t>(std::stoi(portEnv))
-        : 7777;
+    uint16_t port = 7777;
+    if (const char* portEnv = std::getenv("SERVER_PORT")) {
+        try {
+            const int parsed = std::stoi(portEnv);
+            if (parsed < 0 || parsed > 65535) {
+                Logger::Log(LogLevel::Error, LogChannel::Transport,
+                    std::format("SERVER_PORT out of range [0,65535]: {} — aborting", portEnv));
+                Logger::Stop();
+                return 1;
+            }
+            port = static_cast<uint16_t>(parsed);
+        } catch (const std::exception& e) {
+            Logger::Log(LogLevel::Error, LogChannel::Transport,
+                std::format("SERVER_PORT is not a valid integer '{}': {} — aborting", portEnv, e.what()));
+            Logger::Stop();
+            return 1;
+        }
+    }
 
     auto transport = TransportFactory::Create(TransportType::SFML);
     if (!transport->Initialize(port)) {
@@ -88,6 +103,10 @@ int main() {
     // Budget: 10ms per tick. NetworkManager::Update() drains the full UDP buffer
     // in a while loop (P-4.3 fix), so all accumulated packets are processed
     // before sleep_until yields the thread.
+    //
+    // Over-budget clamp: if Update() takes longer than kTickInterval (e.g. burst
+    // drain), nextTick falls behind and sleep_until returns immediately, causing
+    // a catch-up spin. We clamp nextTick to now so the loop stays bounded.
 
     constexpr auto kTickInterval = std::chrono::microseconds(10'000);  // 100 Hz
     auto nextTick = std::chrono::steady_clock::now();
@@ -99,6 +118,16 @@ int main() {
         manager.Update();
 
         nextTick += kTickInterval;
+
+        // If the tick ran over budget, reset to avoid catch-up spin.
+        const auto now = std::chrono::steady_clock::now();
+        if (nextTick < now) {
+            Logger::Log(LogLevel::Warning, LogChannel::Core,
+                std::format("Tick over budget by {:.2f}ms — resetting schedule",
+                    std::chrono::duration<float, std::milli>(now - nextTick).count()));
+            nextTick = now;
+        }
+
         std::this_thread::sleep_until(nextTick);
     }
 

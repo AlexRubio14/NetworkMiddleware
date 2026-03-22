@@ -54,6 +54,15 @@ TEST(NetworkProfiler, RecordTick_NoTicks_AvgIsZero) {
     EXPECT_EQ(s.avgTickTimeUs, 0.0f);
 }
 
+// ─── kFullSyncBytesPerClient ─────────────────────────────────────────────────
+//
+// Asserts the constant independently of any other test that uses it.
+// A bad change to the constant would keep DeltaEfficiency tests green but fail here,
+// catching protocol-size regressions. Value: 149 bits / 8 = 18.625 → ceiling = 19.
+TEST(NetworkProfiler, kFullSyncBytesPerClient_Is19) {
+    EXPECT_EQ(NetworkProfiler::kFullSyncBytesPerClient, 19u);
+}
+
 // ─── DeltaEfficiency ─────────────────────────────────────────────────────────
 
 // No ticks → 0 (no data to compute ratio).

@@ -5,6 +5,29 @@
 
 namespace NetworkMiddleware::Core {
 
+    // ── Record methods ────────────────────────────────────────────────────────
+    // Moved from header per coding guidelines (no implementation in headers).
+    // Trivial single-line atomics; compiler will inline them from this TU anyway.
+
+    void NetworkProfiler::RecordBytesSent(size_t bytes) noexcept {
+        m_bytesSent.fetch_add(bytes, std::memory_order_relaxed);
+    }
+
+    void NetworkProfiler::RecordBytesReceived(size_t bytes) noexcept {
+        m_bytesReceived.fetch_add(bytes, std::memory_order_relaxed);
+    }
+
+    void NetworkProfiler::IncrementRetransmissions() noexcept {
+        m_retransmissions.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void NetworkProfiler::RecordTick(uint64_t microseconds) noexcept {
+        m_tickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
+        m_tickCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // ── GetSnapshot ───────────────────────────────────────────────────────────
+
     NetworkProfiler::Snapshot NetworkProfiler::GetSnapshot(size_t connectedClients) const {
         Snapshot s;
         s.totalBytesSent     = m_bytesSent.load(std::memory_order_relaxed);
@@ -20,18 +43,24 @@ namespace NetworkMiddleware::Core {
         // Delta Efficiency = 1 - (avg_bytes_sent_per_tick / theoretical_full_sync_bytes_per_tick)
         // theoretical = kFullSyncBytesPerClient * connectedClients per tick
         if (ticks > 0 && connectedClients > 0) {
-            const float actualAvg    = static_cast<float>(s.totalBytesSent)
-                                       / static_cast<float>(ticks);
-            const float theoretical  = static_cast<float>(kFullSyncBytesPerClient)
-                                       * static_cast<float>(connectedClients);
+            const float actualAvg   = static_cast<float>(s.totalBytesSent)
+                                      / static_cast<float>(ticks);
+            const float theoretical = static_cast<float>(kFullSyncBytesPerClient)
+                                      * static_cast<float>(connectedClients);
             s.deltaEfficiency = std::max(0.0f, 1.0f - (actualAvg / theoretical));
         }
 
         return s;
     }
 
+    // ── MaybeReport ───────────────────────────────────────────────────────────
+
     void NetworkProfiler::MaybeReport(size_t connectedClients) {
         const auto now = std::chrono::steady_clock::now();
+
+        // Lock prevents two concurrent callers from both passing the interval check
+        // and emitting duplicate reports (relevant once P-4.4 thread pool is active).
+        std::lock_guard<std::mutex> lock(m_reportMutex);
         if (now - m_lastReportTime < kReportInterval)
             return;
 

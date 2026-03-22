@@ -19,6 +19,7 @@
 #include <format>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -37,16 +38,34 @@ using namespace NetworkMiddleware::Transport;
 // sf::IpAddress(uint32_t) and sf::IpAddress::toInteger() both use network
 // byte order, so EndPoints used with SFMLTransport must match.
 // Note: test-only EndPoints (MockTransport) are opaque keys — unaffected.
-static uint32_t ParseIpv4(const std::string& ip) {
+//
+// Validates: exactly 4 octets, each in [0, 255]. Returns 0 on error (caller
+// must treat 0.0.0.0 as invalid for a server address).
+static bool ParseIpv4(const std::string& ip, uint32_t& out) {
     uint32_t result = 0;
     int shift = 24;  // MSB first: octet A in bits 24-31 (network byte order)
+    int octetCount = 0;
     std::istringstream ss(ip);
     std::string token;
-    while (std::getline(ss, token, '.') && shift >= 0) {
-        result |= (static_cast<uint32_t>(std::stoi(token)) << shift);
+    while (std::getline(ss, token, '.')) {
+        if (octetCount >= 4)
+            return false;  // more than 4 octets
+        int octet;
+        try {
+            octet = std::stoi(token);
+        } catch (...) {
+            return false;  // non-numeric
+        }
+        if (octet < 0 || octet > 255)
+            return false;  // out of range
+        result |= (static_cast<uint32_t>(octet) << shift);
         shift -= 8;
+        ++octetCount;
     }
-    return result;
+    if (octetCount != 4)
+        return false;  // fewer than 4 octets
+    out = result;
+    return true;
 }
 
 int main() {
@@ -55,8 +74,33 @@ int main() {
     const char* hostEnv = std::getenv("SERVER_HOST");
     const char* portEnv = std::getenv("SERVER_PORT");
     const std::string serverHost = hostEnv ? hostEnv : "127.0.0.1";
-    const uint16_t    serverPort = portEnv
-        ? static_cast<uint16_t>(std::stoi(portEnv)) : 7777;
+
+    uint16_t serverPort = 7777;
+    if (portEnv) {
+        try {
+            const int parsed = std::stoi(portEnv);
+            if (parsed < 0 || parsed > 65535) {
+                Logger::Log(LogLevel::Error, LogChannel::Core,
+                    std::format("SERVER_PORT out of range [0,65535]: {} — aborting", portEnv));
+                Logger::Stop();
+                return 1;
+            }
+            serverPort = static_cast<uint16_t>(parsed);
+        } catch (const std::exception& e) {
+            Logger::Log(LogLevel::Error, LogChannel::Core,
+                std::format("SERVER_PORT is not a valid integer '{}': {} — aborting", portEnv, e.what()));
+            Logger::Stop();
+            return 1;
+        }
+    }
+
+    uint32_t serverIp = 0;
+    if (!ParseIpv4(serverHost, serverIp)) {
+        Logger::Log(LogLevel::Error, LogChannel::Core,
+            std::format("SERVER_HOST '{}' is not a valid dotted-decimal IPv4 — aborting", serverHost));
+        Logger::Stop();
+        return 1;
+    }
 
     Logger::Banner("HeadlessBot — P-4.1/4.2");
     Logger::Log(LogLevel::Info, LogChannel::General,
@@ -70,7 +114,7 @@ int main() {
         return 1;
     }
 
-    const EndPoint serverEp{ParseIpv4(serverHost), serverPort};
+    const EndPoint serverEp{serverIp, serverPort};
     BotClient bot(transport, serverEp);
     bot.Connect();
 
