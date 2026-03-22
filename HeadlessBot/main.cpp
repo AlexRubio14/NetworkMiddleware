@@ -97,17 +97,36 @@ int main() {
         std::format("Established — NetworkID={}  token={:#018x}",
             bot.GetNetworkID(), bot.GetReconnectionToken()));
 
-    // ── 60 Hz input loop ──────────────────────────────────────────────────────
+    // ── 60 Hz input loop — Chaos mode (P-4.3) ────────────────────────────────
+    // Direction changes every 0.5s to maximize delta compression stress:
+    // each direction flip produces a large delta vs the previous state,
+    // exercising the snapshot buffer and forcing frequent full-field updates.
     std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<float> dir(-1.0f, 1.0f);
     std::uniform_int_distribution<int>    btn(0, 0xFF);
 
-    constexpr auto kTickInterval = std::chrono::microseconds(16'667);  // ~60 Hz
-    auto nextTick = std::chrono::steady_clock::now();
+    constexpr auto kTickInterval   = std::chrono::microseconds(16'667);   // ~60 Hz
+    constexpr auto kChaosInterval  = std::chrono::milliseconds(500);      // flip every 0.5s
+
+    float chaosDirX = dir(rng);
+    float chaosDirY = dir(rng);
+
+    auto nextTick             = std::chrono::steady_clock::now();
+    auto nextDirectionChange  = nextTick + kChaosInterval;
 
     while (bot.GetState() == BotClient::State::Established) {
+        const auto now = std::chrono::steady_clock::now();
+
+        // Chaos: pick a new random direction every 0.5s.
+        if (now >= nextDirectionChange) {
+            chaosDirX = dir(rng);
+            chaosDirY = dir(rng);
+            nextDirectionChange = now + kChaosInterval;
+        }
+
         bot.Update();
-        bot.SendInput(dir(rng), dir(rng), static_cast<uint8_t>(btn(rng)));
+        bot.SendInput(chaosDirX, chaosDirY, static_cast<uint8_t>(btn(rng)));
+
         nextTick += kTickInterval;
         std::this_thread::sleep_until(nextTick);
     }

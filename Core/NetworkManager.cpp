@@ -25,22 +25,28 @@ namespace NetworkMiddleware::Core {
     // m_nextNetworkID y m_rng.
     // -------------------------------------------------------------------------
     void NetworkManager::Update() {
+        const auto tickStart = std::chrono::high_resolution_clock::now();
+
         // 1. Reintentar paquetes fiables no confirmados + detectar Link Loss
         ResendPendingPackets();
 
         // 2. Expirar handshakes sin respuesta (> 5 segundos)
         CheckTimeouts();
 
-        // 3. Recibir un paquete del transporte
-        auto buffer = std::make_shared<std::vector<uint8_t>>();
+        // 3. Drenar TODOS los paquetes pendientes del buffer del OS (P-4.3: while, no if).
+        // Con N bots a 60 Hz, el OS acumula cientos de paquetes entre ticks.
+        // Un 'if' solo procesaría 1 por Update() y la cola crecería sin límite.
+        std::vector<uint8_t> buffer;
         Shared::EndPoint sender;
 
-        if (m_transport->Receive(*buffer, sender)) {
+        while (m_transport->Receive(buffer, sender)) {
+            m_profiler.RecordBytesReceived(buffer.size());
+
             // 4. Validar tamaño mínimo del header
             constexpr size_t kHeaderBytes = Shared::PacketHeader::kByteCount;
-            if (buffer->size() >= kHeaderBytes) {
+            if (buffer.size() >= kHeaderBytes) {
                 // 5. Parsear el header de P-3.1
-                Shared::BitReader reader(*buffer, buffer->size() * 8);
+                Shared::BitReader reader(buffer, buffer.size() * 8);
                 const Shared::PacketHeader header = Shared::PacketHeader::Read(reader);
 
                 Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
@@ -109,7 +115,7 @@ namespace NetworkMiddleware::Core {
                                 Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
                                     std::format("Duplicado descartado: seq={} de {}", header.sequence, sender.ToString()));
                             } else if (type == Shared::PacketType::Reliable) {
-                                HandleReliableOrdered(reader, client, sender, buffer->size() * 8, header);
+                                HandleReliableOrdered(reader, client, sender, buffer.size() * 8, header);
                             } else {
                                 // Filtro de paquetes Unreliable fuera de orden (P-3.4).
                                 // Solo Snapshot, Input y Heartbeat pasan por esta barrera.
@@ -151,7 +157,7 @@ namespace NetworkMiddleware::Core {
                 }
             } else {
                 Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
-                    std::format("Paquete descartado: {} bytes (mínimo {})", buffer->size(), kHeaderBytes));
+                    std::format("Paquete descartado: {} bytes (mínimo {})", buffer.size(), kHeaderBytes));
             }
         }
 
@@ -159,6 +165,12 @@ namespace NetworkMiddleware::Core {
         // Runs AFTER Receive() so a packet arriving just before the timeout threshold
         // updates lastIncomingTime before the zombie check runs.
         ProcessSessionKeepAlive(std::chrono::steady_clock::now());
+
+        // 8. P-4.3: Record tick time and emit profiler report every 5 seconds.
+        const auto tickEnd = std::chrono::high_resolution_clock::now();
+        m_profiler.RecordTick(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(tickEnd - tickStart).count()));
+        m_profiler.MaybeReport(m_establishedClients.size());
     }
 
     // -------------------------------------------------------------------------
@@ -372,6 +384,7 @@ namespace NetworkMiddleware::Core {
             ++client.m_nextOutgoingReliableSeq;
 
         m_transport->Send(compressed, to);
+        m_profiler.RecordBytesSent(compressed.size());
     }
 
     // -------------------------------------------------------------------------
@@ -418,6 +431,7 @@ namespace NetworkMiddleware::Core {
                     writer.WriteBits(byte, 8);
 
                 m_transport->Send(writer.GetCompressedData(), endpoint);
+                m_profiler.IncrementRetransmissions();
 
                 pending.lastSentTime = now;
                 ++pending.retryCount;

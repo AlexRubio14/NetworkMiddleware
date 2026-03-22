@@ -264,3 +264,29 @@ TEST(NetworkManager, Send_ToUnknownEndpoint_NoTransmit) {
 
     EXPECT_TRUE(t->sentPackets.empty());
 }
+
+// ─── P-4.3: While-drain ───────────────────────────────────────────────────────
+
+// A single Update() must drain ALL pending packets, not just one.
+// This validates the if→while fix in NetworkManager::Update().
+TEST(NetworkManager, WhileDrain_ProcessesAllPendingPacketsInOneUpdate) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    // Inject 3 ConnectionRequests from 3 distinct endpoints before any Update().
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0100007F, 9001));
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0200007F, 9002));
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), MakeEndpoint(0x0300007F, 9003));
+
+    // Single Update() — all 3 must be processed.
+    nm.Update();
+
+    // All 3 should now be in pending (waiting for ChallengeResponse).
+    EXPECT_EQ(nm.GetPendingCount(), 3u);
+}
+
+// ─── P-4.3: kMaxClients constant ─────────────────────────────────────────────
+
+TEST(NetworkManager, kMaxClients_IsOneHundred) {
+    EXPECT_EQ(NetworkManager::kMaxClients, 100u);
+}
