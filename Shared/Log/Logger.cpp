@@ -96,10 +96,11 @@ namespace NetworkMiddleware::Shared {
         m_cv.notify_one();
     }
 
-    void Logger::LogPacket(LogChannel channel, std::shared_ptr<std::vector<uint8_t>> data) {
+    void Logger::LogPacket(LogChannel channel, std::shared_ptr<std::vector<uint8_t>> data,
+                           DumpMode mode) {
         std::lock_guard lock(m_mutex);
         m_logQueue.push({LogLevel::Packet, channel, "Packet dump", std::move(data),
-                         std::chrono::system_clock::now()});
+                         std::chrono::system_clock::now(), mode});
         m_cv.notify_one();
     }
 
@@ -189,8 +190,13 @@ namespace NetworkMiddleware::Shared {
                       << color        << entry.message   << Ansi::Reset
                       << '\n';
 
-            if (entry.level == LogLevel::Packet && entry.rawData && !entry.rawData->empty())
-                std::cout << FormatPacket(*entry.rawData) << '\n';
+            if (entry.level == LogLevel::Packet && entry.rawData && !entry.rawData->empty()) {
+                switch (entry.dumpMode) {
+                    case DumpMode::Binary:    std::cout << FormatPacketBinary(*entry.rawData)    << '\n'; break;
+                    case DumpMode::HexBinary: std::cout << FormatPacketHexBinary(*entry.rawData) << '\n'; break;
+                    default:                  std::cout << FormatPacketHex(*entry.rawData)        << '\n'; break;
+                }
+            }
         }
     }
 
@@ -242,24 +248,35 @@ namespace NetworkMiddleware::Shared {
         }
     }
 
-    // ─── Wireshark-style packet dump ──────────────────────────────────────────
-    // Format:
-    //   0000  01 02 03 04 05 06 07 08  09 0a 0b 0c 0d 0e 0f 10  |................|
+    // ─── Packet dump formatters ───────────────────────────────────────────────
 
-    std::string Logger::FormatPacket(const std::vector<uint8_t>& data) {
+    // Helper: printable char or dot
+    static char PrintableChar(uint8_t b) {
+        return std::isprint(static_cast<unsigned char>(b)) ? static_cast<char>(b) : '.';
+    }
+
+    // Helper: 8-bit binary string, MSB first
+    static std::string ToBinary8(uint8_t b) {
+        std::string s(8, '0');
+        for (int i = 7; i >= 0; --i)
+            s[7 - i] = ((b >> i) & 1) ? '1' : '0';
+        return s;
+    }
+
+    // ── Mode 1: Hex ───────────────────────────────────────────────────────────
+    // Format (8 bytes/row):
+    //   0000  a3 1f 48 65 6c 6c 6f 20  |..Hello |
+    std::string Logger::FormatPacketHex(const std::vector<uint8_t>& data) {
         std::ostringstream ss;
         const size_t total = data.size();
-        constexpr size_t kRowBytes = 16;
+        constexpr size_t kRow = 8;
 
-        for (size_t offset = 0; offset < total; offset += kRowBytes) {
-            // Offset column
+        for (size_t offset = 0; offset < total; offset += kRow) {
             ss << Ansi::Gray
                << "   " << std::hex << std::setw(4) << std::setfill('0') << offset
                << "  " << Ansi::Reset;
 
-            // Hex columns (two groups of 8)
-            for (size_t i = 0; i < kRowBytes; ++i) {
-                if (i == 8) ss << ' ';  // gap between groups
+            for (size_t i = 0; i < kRow; ++i) {
                 if (offset + i < total)
                     ss << Ansi::Magenta
                        << std::hex << std::setw(2) << std::setfill('0')
@@ -269,19 +286,83 @@ namespace NetworkMiddleware::Shared {
                     ss << "   ";
             }
 
-            // ASCII column
             ss << Ansi::Gray << " |" << Ansi::Reset;
-            for (size_t i = 0; i < kRowBytes && offset + i < total; ++i) {
-                const uint8_t b = data[offset + i];
-                ss << (std::isprint(b) ? static_cast<char>(b) : '.');
-            }
+            for (size_t i = 0; i < kRow && offset + i < total; ++i)
+                ss << PrintableChar(data[offset + i]);
             ss << Ansi::Gray << "|" << Ansi::Reset << '\n';
         }
 
-        ss << Ansi::Gray
-           << "   " << std::dec << total << " bytes"
-           << Ansi::Reset;
+        ss << Ansi::Gray << "   " << std::dec << total << " bytes" << Ansi::Reset;
+        return ss.str();
+    }
 
+    // ── Mode 2: Binary ────────────────────────────────────────────────────────
+    // Format (1 byte/row):
+    //   [00] 0xa3  10100011   163  .
+    //   [01] 0x48  01001000    72  H
+    std::string Logger::FormatPacketBinary(const std::vector<uint8_t>& data) {
+        std::ostringstream ss;
+        const size_t total = data.size();
+
+        for (size_t i = 0; i < total; ++i) {
+            const uint8_t b = data[i];
+            ss << Ansi::Gray  << "   [" << std::dec << std::setw(2) << std::setfill('0') << i << "] "
+               << Ansi::Reset
+               << Ansi::Magenta << "0x" << std::hex << std::setw(2) << std::setfill('0')
+               << static_cast<int>(b) << "  " << Ansi::Reset
+               << Ansi::Cyan   << ToBinary8(b) << "  " << Ansi::Reset
+               << Ansi::White  << std::dec << std::setw(3) << std::setfill(' ')
+               << static_cast<int>(b) << "  " << Ansi::Reset
+               << Ansi::Gray   << PrintableChar(b) << Ansi::Reset
+               << '\n';
+        }
+
+        ss << Ansi::Gray << "   " << std::dec << total << " bytes" << Ansi::Reset;
+        return ss.str();
+    }
+
+    // ── Mode 3: HexBinary ─────────────────────────────────────────────────────
+    // Format (4 bytes/row):
+    //   0000  a3 1f 48 65  10100011 00011111 01001000 01100101  |..He|
+    std::string Logger::FormatPacketHexBinary(const std::vector<uint8_t>& data) {
+        std::ostringstream ss;
+        const size_t total = data.size();
+        constexpr size_t kRow = 4;
+
+        for (size_t offset = 0; offset < total; offset += kRow) {
+            // Offset
+            ss << Ansi::Gray
+               << "   " << std::hex << std::setw(4) << std::setfill('0') << offset
+               << "  " << Ansi::Reset;
+
+            // Hex group
+            for (size_t i = 0; i < kRow; ++i) {
+                if (offset + i < total)
+                    ss << Ansi::Magenta
+                       << std::hex << std::setw(2) << std::setfill('0')
+                       << static_cast<int>(data[offset + i])
+                       << ' ' << Ansi::Reset;
+                else
+                    ss << "   ";
+            }
+            ss << ' ';
+
+            // Binary group
+            for (size_t i = 0; i < kRow; ++i) {
+                if (offset + i < total)
+                    ss << Ansi::Cyan << ToBinary8(data[offset + i]) << ' ' << Ansi::Reset;
+                else
+                    ss << "         ";
+            }
+
+            // ASCII
+            ss << Ansi::Gray << " |" << Ansi::Reset;
+            for (size_t i = 0; i < kRow && offset + i < total; ++i)
+                ss << PrintableChar(data[offset + i]);
+            ss << Ansi::Gray << "|" << Ansi::Reset << '\n';
+        }
+
+        ss << Ansi::Gray << "   " << std::dec << total << " bytes" << Ansi::Reset;
         return ss.str();
     }
 
