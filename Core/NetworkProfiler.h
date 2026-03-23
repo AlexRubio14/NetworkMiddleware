@@ -12,6 +12,10 @@ namespace NetworkMiddleware::Core {
     // m_startTime and m_lastReportTime are protected by m_reportMutex because
     // std::chrono::time_point is not atomic and MaybeReport() does a check-then-act.
     //
+    // P-4.4: m_recentAvgTickUs uses EMA(α=0.1) updated by RecordTick() on the main
+    // thread only. Written single-threaded, read by JobSystem::MaybeScale() also on
+    // the main thread → no CAS needed, relaxed ordering sufficient.
+    //
     // Usage (from NetworkManager::Update()):
     //   m_profiler.RecordBytesReceived(buffer.size());   // after each Receive()
     //   m_profiler.RecordBytesSent(compressed.size());   // after each Send/resend
@@ -27,16 +31,31 @@ namespace NetworkMiddleware::Core {
             uint32_t retransmissions    = 0;
             float    avgTickTimeUs      = 0.0f;
             float    deltaEfficiency    = 0.0f;  // 1 - (actual_avg_bytes / theoretical_full_sync_bytes)
+            float    recentAvgTickMs    = 0.0f;  // P-4.4: EMA(α=0.1) — reactive to load spikes
         };
 
         // Full sync: 149 bits ≈ 19 bytes per client (P-2/P-3.5 validated result).
         static constexpr uint32_t kFullSyncBytesPerClient = 19;
 
+        // EMA smoothing factor — α=0.1 gives a half-life of ~7 ticks at 100 Hz.
+        static constexpr float kEmaAlpha = 0.1f;
+
         // Declarations only — implementations in NetworkProfiler.cpp.
         void RecordBytesSent(size_t bytes) noexcept;
         void RecordBytesReceived(size_t bytes) noexcept;
         void IncrementRetransmissions() noexcept;
+
+        // RecordTick: updates cumulative average AND the EMA reactive average.
+        // Must be called from the main thread (single-threaded write to m_recentAvgTickUs).
         void RecordTick(uint64_t microseconds) noexcept;
+
+        // Returns the EMA-smoothed recent tick time in microseconds.
+        // Safe to call from any thread (relaxed atomic read).
+        float GetRecentAvgTickUs() const noexcept;
+
+        // Test hook: override the EMA value without going through RecordTick().
+        // Allows scaling-threshold tests to inject synthetic load without timing.
+        void SetRecentAvgTickUsForTest(float valueUs) noexcept;
 
         // Prints a summary report via Logger if kReportInterval (5s) has elapsed.
         // Thread-safe: m_reportMutex prevents duplicate reports from concurrent callers.
@@ -51,6 +70,10 @@ namespace NetworkMiddleware::Core {
         std::atomic<uint32_t> m_retransmissions{0};
         std::atomic<uint64_t> m_tickTimeAccumUs{0};
         std::atomic<uint32_t> m_tickCount{0};
+
+        // P-4.4: EMA reactive tick time. Written only by RecordTick() (main thread).
+        // std::atomic<float> is standard since C++20; store/load with relaxed ordering.
+        std::atomic<float>    m_recentAvgTickUs{0.0f};
 
         // Protected by m_reportMutex: not atomic, accessed in check-then-act.
         mutable std::mutex                    m_reportMutex;

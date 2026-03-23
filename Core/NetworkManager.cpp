@@ -768,15 +768,86 @@ namespace NetworkMiddleware::Core {
     }
 
     // -------------------------------------------------------------------------
-    // SendSnapshot — P-3.7 Game Loop
+    // SerializeSnapshot (private, const) — P-4.4 Split-Phase
     //
-    // Sends an authoritative snapshot to `to` using delta compression when a
-    // confirmed baseline exists, or a full Serialize() as fallback.
+    // Pure serialization: builds the wire payload for a snapshot without
+    // modifying any client state.  Safe to call from Job System worker threads
+    // while the main thread is blocked on std::latch::wait(), because:
+    //   • m_establishedClients is not modified during Phase A.
+    //   • RemoteClient fields read here (m_history, m_lastClientAckedServerSeq)
+    //     were written in previous ticks and are stable during Phase A.
+    //   • BitWriter is a local object — no aliasing.
     //
-    // Wire format: [tickID:32][HeroState bits from Serializer]
+    // Wire format: [tickID:32][HeroState bits — delta or full]
+    // -------------------------------------------------------------------------
+    std::vector<uint8_t> NetworkManager::SerializeSnapshot(
+        const RemoteClient& client,
+        const Shared::Data::HeroState& state,
+        uint32_t tickID) const
+    {
+        Shared::BitWriter writer;
+        writer.WriteBits(tickID, 32);
+
+        const Shared::Data::HeroState* baseline = nullptr;
+        if (client.m_lastClientAckedServerSeqValid)
+            baseline = client.GetBaseline(client.m_lastClientAckedServerSeq);
+
+        if (baseline)
+            Shared::Network::HeroSerializer::SerializeDelta(state, *baseline, writer);
+        else
+            Shared::Network::HeroSerializer::Serialize(state, writer);
+
+        return writer.GetCompressedData();
+    }
+
+    // -------------------------------------------------------------------------
+    // SerializeSnapshotFor (public const) — P-4.4 Phase A entry point
     //
-    // The snapshot is recorded in the client's history for future delta baselines
-    // using the sequence number that was assigned to this packet.
+    // Public wrapper: looks up the client by endpoint and delegates to the
+    // private SerializeSnapshot.  Returns {} if `to` is unknown.
+    // -------------------------------------------------------------------------
+    std::vector<uint8_t> NetworkManager::SerializeSnapshotFor(
+        const Shared::EndPoint& to,
+        const Shared::Data::HeroState& state,
+        uint32_t tickID) const
+    {
+        const auto it = m_establishedClients.find(to);
+        if (it == m_establishedClients.end())
+            return {};
+        return SerializeSnapshot(it->second, state, tickID);
+    }
+
+    // -------------------------------------------------------------------------
+    // CommitAndSendSnapshot (public) — P-4.4 Phase B entry point
+    //
+    // Main-thread only.  Assumes Phase A has completed (std::latch::wait()
+    // returned).  Records the snapshot in the client's history and transmits
+    // the pre-built payload over the transport.
+    //
+    // usedSeq is captured BEFORE Send() because Send() calls AdvanceLocal(),
+    // which increments localSequence.  RecordSnapshot must use the seq that
+    // will appear in the packet header, not the next one.
+    // -------------------------------------------------------------------------
+    void NetworkManager::CommitAndSendSnapshot(
+        const Shared::EndPoint& to,
+        const Shared::Data::HeroState& state,
+        const std::vector<uint8_t>& payload)
+    {
+        auto it = m_establishedClients.find(to);
+        if (it == m_establishedClients.end())
+            return;
+
+        RemoteClient& client = it->second;
+        const uint16_t usedSeq = client.seqContext.localSequence;
+        client.RecordSnapshot(usedSeq, state);
+        Send(to, payload, Shared::PacketType::Snapshot);
+    }
+
+    // -------------------------------------------------------------------------
+    // SendSnapshot — P-3.7 Game Loop (single-threaded convenience path)
+    //
+    // Wraps SerializeSnapshot + CommitAndSendSnapshot for callers that do not
+    // use the Split-Phase Job System path.  Existing tests remain unmodified.
     // -------------------------------------------------------------------------
     void NetworkManager::SendSnapshot(const Shared::EndPoint& to,
                                       const Shared::Data::HeroState& state,
@@ -786,31 +857,9 @@ namespace NetworkMiddleware::Core {
             return;
 
         RemoteClient& client = it->second;
-
-        // Capture the seq that Send() will assign to this packet (before AdvanceLocal).
         const uint16_t usedSeq = client.seqContext.localSequence;
-
-        // Build payload: tickID prefix + serialized hero state
-        Shared::BitWriter writer;
-        writer.WriteBits(tickID, 32);
-
-        const Shared::Data::HeroState* baseline = nullptr;
-        if (client.m_lastClientAckedServerSeqValid)
-            baseline = client.GetBaseline(client.m_lastClientAckedServerSeq);
-
-        if (baseline) {
-            Shared::Network::HeroSerializer::SerializeDelta(state, *baseline, writer);
-        } else {
-            // No confirmed baseline yet — send full state
-            Shared::Network::HeroSerializer::Serialize(state, writer);
-        }
-
-        const std::vector<uint8_t> payload = writer.GetCompressedData();
-
-        // Record this snapshot BEFORE Send() so the history entry is available
-        // even if the send fails partway through.
+        const auto payload = SerializeSnapshot(client, state, tickID);
         client.RecordSnapshot(usedSeq, state);
-
         Send(to, payload, Shared::PacketType::Snapshot);
     }
 

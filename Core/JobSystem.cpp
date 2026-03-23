@@ -1,0 +1,221 @@
+// Core/JobSystem.cpp — P-4.4 Dynamic Work-Stealing Job System
+
+#include "JobSystem.h"
+#include "../Shared/Log/Logger.h"
+#include <algorithm>
+#include <format>
+
+namespace NetworkMiddleware::Core {
+
+// ─── WorkStealingQueue ────────────────────────────────────────────────────────
+
+void WorkStealingQueue::Push(std::function<void()> task) {
+    std::lock_guard lock(m_mutex);
+    m_tasks.push_front(std::move(task));
+}
+
+bool WorkStealingQueue::Pop(std::function<void()>& out) {
+    std::lock_guard lock(m_mutex);
+    if (m_tasks.empty()) return false;
+    out = std::move(m_tasks.front());
+    m_tasks.pop_front();
+    return true;
+}
+
+bool WorkStealingQueue::Steal(std::function<void()>& out) {
+    std::lock_guard lock(m_mutex);
+    if (m_tasks.empty()) return false;
+    out = std::move(m_tasks.back());
+    m_tasks.pop_back();
+    return true;
+}
+
+bool WorkStealingQueue::Empty() const {
+    std::lock_guard lock(m_mutex);
+    return m_tasks.empty();
+}
+
+size_t WorkStealingQueue::Size() const {
+    std::lock_guard lock(m_mutex);
+    return m_tasks.size();
+}
+
+// ─── JobSystem ────────────────────────────────────────────────────────────────
+
+JobSystem::JobSystem(size_t initialThreads) :
+    m_maxThreads(std::max(kMinThreads,
+                          static_cast<size_t>(std::thread::hardware_concurrency()) > 1
+                              ? static_cast<size_t>(std::thread::hardware_concurrency()) - 1u
+                              : kMinThreads))
+{
+    // Pre-allocate all slots so the vector never reallocates (workers hold raw ptrs).
+    m_slots.reserve(m_maxThreads);
+    for (size_t i = 0; i < m_maxThreads; ++i)
+        m_slots.push_back(std::make_unique<WorkerSlot>());
+
+    // Start the requested number of threads (clamped to [kMinThreads, kMaxThreads]).
+    const size_t startCount = std::clamp(initialThreads, kMinThreads, m_maxThreads);
+
+    std::lock_guard lock(m_scaleMutex);
+    for (size_t i = 0; i < startCount; ++i)
+        AddThread();
+}
+
+JobSystem::~JobSystem() {
+    // Request stop on all active threads, then join via jthread destructor.
+    // We call request_stop() first so all threads can begin draining simultaneously.
+    const size_t count = m_activeCount.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < count; ++i) {
+        m_slots[i]->shouldRun.store(false, std::memory_order_relaxed);
+        if (m_slots[i]->thread)
+            m_slots[i]->thread->request_stop();
+    }
+    // Wake all sleeping workers so they can observe the stop.
+    m_cv.notify_all();
+    // jthread destructors join automatically.
+    for (size_t i = 0; i < count; ++i)
+        m_slots[i]->thread.reset();
+}
+
+// ─── Execute ─────────────────────────────────────────────────────────────────
+
+void JobSystem::Execute(std::function<void()> task) {
+    const size_t count = m_activeCount.load(std::memory_order_acquire);
+    if (count == 0) {
+        // Safety fallback: no workers alive, run inline.
+        task();
+        return;
+    }
+    // Round-robin dispatch to active queues.
+    const size_t idx = m_dispatchIdx.fetch_add(1, std::memory_order_relaxed) % count;
+    m_slots[idx]->queue.Push(std::move(task));
+
+    // Wake one idle worker.
+    m_cv.notify_one();
+}
+
+// ─── WorkerLoop ──────────────────────────────────────────────────────────────
+
+void JobSystem::WorkerLoop(size_t myIdx, std::stop_token stop) {
+    while (!stop.stop_requested() &&
+           m_slots[myIdx]->shouldRun.load(std::memory_order_relaxed))
+    {
+        std::function<void()> task;
+
+        // 1. Try own queue first (LIFO — hot cache path).
+        if (m_slots[myIdx]->queue.Pop(task)) {
+            task();
+            continue;
+        }
+
+        // 2. Work-stealing: scan active peers starting from the next slot
+        //    (randomising start index reduces systematic contention).
+        const size_t count = m_activeCount.load(std::memory_order_acquire);
+        bool stolen = false;
+        for (size_t offset = 1; offset < count && !stolen; ++offset) {
+            const size_t victim = (myIdx + offset) % count;
+            if (m_slots[victim]->queue.Steal(task)) {
+                m_stealCount.fetch_add(1, std::memory_order_relaxed);
+                task();
+                stolen = true;
+            }
+        }
+        if (stolen) continue;
+
+        // 3. No work found — sleep until a task arrives or we are stopped.
+        std::unique_lock lock(m_cvMutex);
+        m_cv.wait_for(lock, std::chrono::microseconds(200), [&] {
+            return stop.stop_requested() ||
+                   !m_slots[myIdx]->shouldRun.load(std::memory_order_relaxed) ||
+                   !m_slots[myIdx]->queue.Empty();
+        });
+    }
+}
+
+// ─── MaybeScale ──────────────────────────────────────────────────────────────
+
+void JobSystem::MaybeScale(float recentAvgTickMs) {
+    if (++m_scaleTick < kScaleCheckIntervalTicks)
+        return;
+    m_scaleTick = 0;
+
+    std::lock_guard lock(m_scaleMutex);
+    const size_t count = m_activeCount.load(std::memory_order_relaxed);
+
+    if (recentAvgTickMs > kUpscaleThresholdMs && count < m_maxThreads) {
+        AddThread();
+        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+            std::format("[JobSystem] Upscale: {} → {} threads (avgTick={:.2f}ms)",
+                count, count + 1, recentAvgTickMs));
+        return;
+    }
+
+    if (recentAvgTickMs < kDownscaleThresholdMs && count > kMinThreads) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_lastDownscaleTime < kHysteresisDuration)
+            return;  // Hysteresis: too soon after last downscale
+        m_lastDownscaleTime = now;
+        RemoveThread();
+        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
+            std::format("[JobSystem] Downscale: {} → {} threads (avgTick={:.2f}ms)",
+                count, count - 1, recentAvgTickMs));
+    }
+}
+
+// ─── AddThread / RemoveThread ─────────────────────────────────────────────────
+// Both require m_scaleMutex to be held by the caller.
+
+void JobSystem::AddThread() {
+    const size_t idx = m_activeCount.load(std::memory_order_relaxed);
+    if (idx >= m_maxThreads) return;
+
+    m_slots[idx]->shouldRun.store(true, std::memory_order_relaxed);
+    // Increment BEFORE starting the thread so WorkerLoop sees a valid count.
+    m_activeCount.fetch_add(1, std::memory_order_release);
+
+    m_slots[idx]->thread.emplace([this, idx](std::stop_token st) {
+        WorkerLoop(idx, st);
+    });
+}
+
+void JobSystem::RemoveThread() {
+    const size_t count = m_activeCount.load(std::memory_order_relaxed);
+    if (count <= kMinThreads) return;
+
+    const size_t idx = count - 1;
+
+    // Decrement BEFORE stopping so the thread stops stealing from peers.
+    m_activeCount.fetch_sub(1, std::memory_order_release);
+
+    m_slots[idx]->shouldRun.store(false, std::memory_order_relaxed);
+    if (m_slots[idx]->thread) {
+        m_slots[idx]->thread->request_stop();
+        m_cv.notify_all();   // wake thread so it can observe shouldRun = false
+        m_slots[idx]->thread->join();
+        m_slots[idx]->thread.reset();
+    }
+}
+
+// ─── Accessors ────────────────────────────────────────────────────────────────
+
+size_t JobSystem::GetThreadCount() const noexcept {
+    return m_activeCount.load(std::memory_order_relaxed);
+}
+
+uint64_t JobSystem::GetStealCount() const noexcept {
+    return m_stealCount.load(std::memory_order_relaxed);
+}
+
+// ─── Test hooks ───────────────────────────────────────────────────────────────
+
+void JobSystem::ForceAddThread() {
+    std::lock_guard lock(m_scaleMutex);
+    AddThread();
+}
+
+void JobSystem::ForceRemoveThread() {
+    std::lock_guard lock(m_scaleMutex);
+    RemoveThread();
+}
+
+} // namespace NetworkMiddleware::Core
