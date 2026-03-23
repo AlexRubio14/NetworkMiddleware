@@ -273,6 +273,41 @@ TEST(GameWorld, ForEachEstablished_ReceivesBufferedInput) {
     EXPECT_TRUE(gotInput);
 }
 
+TEST(GameWorld, ForEachEstablished_MultipleClients_PartialInput) {
+    // Two clients connected; only client A sends an input this tick.
+    // ForEachEstablished must deliver a valid InputPayload* for A and nullptr for B.
+    auto transport = std::make_shared<MockTransport>();
+    NetworkManager nm(transport);
+
+    const EndPoint epA = MakeEp(9010);
+    const EndPoint epB = MakeEp(9011);
+
+    DoHandshake(*transport, nm, epA);
+    DoHandshake(*transport, nm, epB);
+    transport->sentPackets.clear();
+
+    // Only client A sends input
+    BitWriter w;
+    PacketHeader h;
+    h.sequence = 1;
+    h.type     = static_cast<uint8_t>(PacketType::Input);
+    h.Write(w);
+    InputPayload{1.0f, 0.0f, 0}.Write(w);
+    transport->InjectPacket(w.GetCompressedData(), epA);
+
+    nm.Update();
+
+    int withInput    = 0;
+    int withoutInput = 0;
+    nm.ForEachEstablished([&](uint16_t, const EndPoint&, const InputPayload* inp) {
+        if (inp) ++withInput;
+        else     ++withoutInput;
+    });
+
+    EXPECT_EQ(withInput,    1);
+    EXPECT_EQ(withoutInput, 1);
+}
+
 TEST(GameWorld, ForEachEstablished_InputClearedAfterCallback) {
     auto transport = std::make_shared<MockTransport>();
     NetworkManager nm(transport);

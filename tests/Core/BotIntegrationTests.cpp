@@ -133,11 +133,11 @@ TEST(BotIntegration, SendInput_DataCallbackNotFiredForInputPackets) {
     EXPECT_EQ(callbackFired, 0);
 }
 
-TEST(BotIntegration, InputSequence_StrictlyIncreasing) {
-    // Verifies that the bot increments sequence numbers across consecutive sends.
-    // Sequences are inspected via ForEachEstablished (pendingInput header is not
-    // re-exposed, so we check via the bot's outgoing seqCtx indirectly by
-    // verifying 5 consecutive inputs are all delivered).
+TEST(BotIntegration, SendInput_AllInputsDeliveredViaForEachEstablished) {
+    // Verifies that every input sent by the bot is delivered exactly once via
+    // ForEachEstablished (one per tick). The old name "InputSequence_StrictlyIncreasing"
+    // was renamed because sequence ordering is no longer observable here — inputs are
+    // buffered as pendingInput and the header is not re-exposed.
     auto serverT = std::make_shared<MockTransport>();
     auto botT    = std::make_shared<MockTransport>();
     NetworkManager nm(serverT);

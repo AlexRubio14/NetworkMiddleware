@@ -828,6 +828,12 @@ namespace NetworkMiddleware::Core {
     void NetworkManager::ForEachEstablished(
         std::function<void(uint16_t, const Shared::EndPoint&, const Shared::InputPayload*)> callback)
     {
+        // CONSTRAINT: the callback must NOT add or remove clients from m_establishedClients.
+        // This method iterates the map directly; any structural modification would
+        // invalidate the iterator and cause undefined behaviour.
+        // Current callers in main.cpp (ApplyInput phase and Snapshot phase) are safe:
+        // they only read GameWorld state and call SendSnapshot, neither of which
+        // modifies m_establishedClients.
         for (auto& [endpoint, client] : m_establishedClients) {
             if (client.isZombie)
                 continue;
