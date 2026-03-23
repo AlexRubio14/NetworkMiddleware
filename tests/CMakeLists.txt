@@ -21,6 +21,7 @@ add_executable(MiddlewareTests
     Core/SessionRecoveryTests.cpp
     Core/BotIntegrationTests.cpp
     Core/ProfilerTests.cpp
+    Core/GameWorldTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE

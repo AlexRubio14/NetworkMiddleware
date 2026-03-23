@@ -1,10 +1,12 @@
 #pragma once
 #include "../Shared/NetworkAddress.h"
 #include "../Shared/Network/PacketHeader.h"
+#include "../Shared/Network/InputPackets.h"
 #include "../Shared/Data/HeroState.h"
 #include <array>
 #include <chrono>
 #include <map>
+#include <optional>
 #include <vector>
 
 namespace NetworkMiddleware::Core {
@@ -134,6 +136,18 @@ namespace NetworkMiddleware::Core {
 
         // When the client transitioned to zombie state (for expiry calculation).
         std::chrono::steady_clock::time_point zombieTime;
+
+        // --- P-3.7 Game Loop ---
+
+        // Buffered input from the client for the current tick.
+        // Set by NetworkManager when a PacketType::Input arrives; consumed and cleared
+        // by ForEachEstablished() during the game loop's input phase.
+        std::optional<Shared::InputPayload> pendingInput;
+
+        // Last server sequence number confirmed by the client (from header.ack of incoming packets).
+        // Used by SendSnapshot() to find the correct delta baseline in m_history.
+        uint16_t m_lastClientAckedServerSeq      = 0;
+        bool     m_lastClientAckedServerSeqValid  = false;
     };
 
 }
