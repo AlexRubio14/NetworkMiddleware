@@ -1,14 +1,14 @@
 ---
 type: dev-log-alex
 phase: Fase 3
-date: 2026-03-22
+date: 2026-03-23
 status: personal
 ---
 
 # DEV LOG — Fase 3: Netcode Core & Session Protocol
 
-**Steps cubiertos:** P-3.1 → P-3.6
-**Fecha:** 2026-03-22
+**Steps cubiertos:** P-3.1 → P-3.7
+**Fecha:** 2026-03-22 → 2026-03-23
 
 ---
 
@@ -23,7 +23,7 @@ UDP crudo tiene exactamente cuatro propiedades problemáticas para un juego onli
 3. **No garantiza orden ni entrega** — compras de objetos pueden llegar en el orden equivocado o no llegar nunca
 4. **No mantiene sesiones** — si el jugador pierde la conexión 10 segundos, no tienes ni idea
 
-La Fase 3 resuelve los cuatro problemas, paso a paso, sin cambiar el socket UDP ni añadir dependencias externas.
+La Fase 3 resuelve los cuatro problemas, paso a paso, sin cambiar el socket UDP ni añadir dependencias externas. P-3.7 añade la quinta pieza: el estado de juego autoritativo que convierte el middleware en un servidor real.
 
 ---
 
@@ -33,6 +33,9 @@ Cada step añade una capa que se apoya en la anterior:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
+│  P-3.7 Minimal Game Loop                                                │
+│  GameWorld · Input→Process→Snapshot · 100Hz fixed-dt · AntiCheat       │
+├─────────────────────────────────────────────────────────────────────────┤
 │  P-3.6 Session Recovery                                                 │
 │  Heartbeat · Zombie State · Reconnection Token                          │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -229,6 +232,70 @@ Token inválido o cliente no-zombie → `ConnectionDenied`. El cliente no puede 
 
 ---
 
+## P-3.7 — Minimal Game Loop
+
+### El problema
+Tras P-3.6, el servidor sabía quién estaba conectado, cuándo se desconectaba, y cómo reenviar datos críticos. Pero seguía siendo un **relay**: los clientes enviaban posiciones y el servidor las retransmitía sin validar nada. Esto implica que cualquier cliente puede enviar una posición falsa — un cheat básico de teleportación — y el servidor la acepta.
+
+El modelo correcto para un MOBA competitivo es el **modelo autoritativo**: el cliente envía *intención* (dirección de movimiento), el servidor ejecuta la física, valida los resultados y envía el estado resultante. El cliente no dicta su posición — la solicita. Lección aprendida en el proyecto legacy AA4 (shooter 2D, 2023): sin servidor autoritativo, los cheats de posición son triviales y la sincronización entre clientes diverge.
+
+### La solución
+
+**GameWorld** — contenedor de simulación autoritativa. Posee un `unordered_map<uint32_t, unique_ptr<ViegoEntity>>` indexado por `networkID`. Los clientes solo existen como entidades de juego mientras están en el mundo.
+
+**InputPayload vs PositionPayload** — decisión crítica de diseño: el cliente envía `{dirX: [-1,1], dirY: [-1,1], buttons: 8 bits}` (24 bits total), no su posición. El servidor aplica `velocity = dir × kMoveSpeed × dt` y actualiza la posición. Un cliente que mande `dirX=999` recibe un clamp a 1.0 — su posición nunca supera `kMapBound=±500`.
+
+**Anti-cheat clamping en dos niveles:**
+1. **Dirección:** `std::clamp(dir, -1.f, 1.f)` — un cliente malicioso no puede moverse más rápido que `kMoveSpeed=100 u/s`
+2. **Posición:** `std::clamp(pos, -kMapBound, kMapBound)` — imposible salir del mapa
+
+**pendingInput** — en lugar de entregar los Input packets vía `m_onDataReceived` (lo que requeriría que el game layer parseara BitReader directamente), `NetworkManager::Update()` intercepta los `PacketType::Input`, los deserializa y los deposita en `RemoteClient::pendingInput` como `optional<InputPayload>`. El game layer los consume a través de `ForEachEstablished`.
+
+**tickID prefix** — cada Snapshot lleva 32 bits de `tickID` al inicio del payload. El cliente Unreal usa este número para reconciliar su predicción local contra el estado autoritario del servidor: "el servidor dice que en el tick 847 mi posición era X,Y". Sin este prefijo, el cliente no puede saber a qué momento de su historia de predicción corresponde la corrección.
+
+### El pipeline de 5 pasos (100Hz)
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant NetworkManager
+    participant GameWorld
+
+    Client->>NetworkManager: Input packet (dirX, dirY, buttons) [24 bits]
+    NetworkManager->>NetworkManager: Update() — buffer como pendingInput en RemoteClient
+    NetworkManager->>GameWorld: ForEachEstablished → ApplyInput(networkID, input, dt=0.01)
+    GameWorld->>GameWorld: clamp dir[-1,1], apply velocity, clamp pos[-500,500]
+    GameWorld->>NetworkManager: ForEachEstablished → GetHeroState(networkID)
+    NetworkManager->>Client: SendSnapshot(ep, state, tickID) [tickID:32 + delta/full]
+    Note over NetworkManager: tickID prefix para lag compensation (Fase 5)
+```
+
+```cpp
+// Server/main.cpp — game loop a 100Hz (kFixedDt = 0.01f)
+nm.Update();                                    // P-3.1→3.6: receive + session keepalive
+
+nm.ForEachEstablished(                          // P-3.7: consume pendingInput → GameWorld
+    [&](uint16_t id, const EndPoint&, const InputPayload* inp) {
+        if (inp) gameWorld.ApplyInput(id, *inp, kFixedDt);
+    });
+
+gameWorld.Tick(kFixedDt);                       // P-3.7: physics placeholder (Fase 5+)
+
+nm.ForEachEstablished(                          // P-3.7: snapshot por cliente
+    [&](uint16_t id, const EndPoint& ep, const InputPayload*) {
+        if (const auto* s = gameWorld.GetHeroState(id))
+            nm.SendSnapshot(ep, *s, tickID);
+    });
+
+++tickID;
+```
+
+### Diagonal movement — decisión de diseño
+
+Con dos ejes normalizados independientes, el movimiento diagonal tiene velocidad `√2 × kMoveSpeed ≈ 141 u/s` en lugar de 100. Esto es **intencional** y estándar en MOBAs (LoL, Dota 2). La alternativa — normalizar el vector 2D — añade complejidad y elimina la ventaja táctica del diagonal que los jugadores esperan. Se documenta como decisión, no como bug.
+
+---
+
 ## El wire format final tras la Fase 3
 
 Cada paquete de juego que sale del servidor:
@@ -241,8 +308,12 @@ Cada paquete de juego que sale del servidor:
 │  Payload — varía según PacketType                                        │
 │                                                                          │
 │  Snapshot (Unreliable):                                                  │
+│    · [tickID: 32 bits]  (lag compensation prefix — P-3.7)               │
 │    · Full sync:  ~149 bits  (primer frame o sin baseline)                │
 │    · Delta:      ~38–91 bits (según campos cambiados)                    │
+│                                                                          │
+│  Input (Unreliable, Client→Server):                                      │
+│    · dirX(8) dirY(8) buttons(8) = 24 bits total                         │
 │                                                                          │
 │  Reliable (Ordered):                                                     │
 │    · reliableSeq(16) + payload bytes                                     │
@@ -257,6 +328,8 @@ Cada paquete de juego que sale del servidor:
 ## Cómo colaboran todos los steps en un frame típico
 
 ```text
+── FASE RECEIVE (NetworkManager::Update) ────────────────────────────────────
+
 NetworkManager::Update() — llamado cada frame en el tick loop del servidor
 │
 ├─ ResendPendingPackets()          ← P-3.3: reintentar no-ACKed con RTT adaptativo (P-3.4)
@@ -280,24 +353,35 @@ NetworkManager::Update() — llamado cada frame en el tick loop del servidor
      │         ├─ lastIncomingTime = now (P-3.6 keepalive)
      │         ├─ RecordReceived(seq) → SequenceContext (P-3.1)
      │         ├─ ProcessAcks(header) → borrar m_reliableSents (P-3.3)
+     │         │   └─ actualizar m_lastClientAckedServerSeq (P-3.7 delta baseline)
      │         ├─ Duplicate check (P-3.1)
+     │         ├─ PacketType::Input → pendingInput = InputPayload::Read() (P-3.7)
      │         ├─ Reliable → HandleReliableOrdered → buffer + drain (P-3.3)
      │         ├─ Heartbeat → no callback (P-3.6)
      │         └─ Unreliable → stale filter (P-3.4) → OnDataReceived
 
-Cuando el game layer quiere enviar estado:
-NetworkManager::Send(ep, payload, channel)
-     ├─ Buscar cliente en m_establishedClients
-     ├─ Build header con ack/ack_bits frescos (P-3.1)
-     ├─ Si Reliable: PendingPacket → m_reliableSents (P-3.3)
-     ├─ sentTimes[seq] = now (P-3.4 RTT sampling)
-     ├─ lastOutgoingTime = now (P-3.6 heartbeat tracking)
-     └─ m_transport->Send()
+── FASE GAME LOOP (P-3.7) ───────────────────────────────────────────────────
 
-Para Snapshots con delta compression (P-3.5):
-     const HeroState* baseline = client.GetBaseline(client.seqContext.remoteAck);
-     if (!baseline) HeroSerializer::Serialize(current, writer);          // full sync
-     else           HeroSerializer::SerializeDelta(current, *baseline, writer); // delta
+ForEachEstablished(apply_input):
+     ├─ iterar clientes establecidos no-zombie
+     ├─ exponer pendingInput (o nullptr si no llegó input este tick)
+     ├─ callback: GameWorld::ApplyInput(id, *inp, dt)   [o idle si nullptr]
+     └─ NO limpiar pendingInput aún (se consume en la siguiente llamada)
+
+GameWorld::Tick(dt):
+     └─ placeholder physics (Fase 5+: IA, colisiones, habilidades)
+
+ForEachEstablished(send_snapshot):
+     ├─ GetHeroState(id) → leer estado autoritario del mundo
+     └─ SendSnapshot(ep, state, tickID):
+          ├─ Buscar cliente en m_establishedClients
+          ├─ Build header con ack/ack_bits frescos (P-3.1)
+          ├─ Escribir tickID(32) al inicio del payload (P-3.7)
+          ├─ GetBaseline(m_lastClientAckedServerSeq) → delta o full sync (P-3.5)
+          ├─ RecordSnapshot(usedSeq, state)   ← ANTES de Send() para evitar seq race
+          └─ m_transport->Send()
+
+++tickID
 ```
 
 ---
@@ -338,6 +422,11 @@ struct RemoteClient {
     time_point lastIncomingTime;
     time_point lastOutgoingTime;
     time_point zombieTime;
+
+    // P-3.7 Game Loop
+    optional<InputPayload> pendingInput;           // input del tick actual (nullptr = idle)
+    uint16_t  m_lastClientAckedServerSeq;          // último server→client seq confirmado
+    bool      m_lastClientAckedServerSeqValid;     // false hasta el primer ACK recibido
 };
 ```
 
@@ -370,6 +459,12 @@ struct RemoteClient {
 | **Reconnection Token** | P-3.6 | uint64_t aleatorio emitido al conectarse; necesario para reconexión segura |
 | **Heartbeat** | P-3.6 | Paquete vacío enviado automáticamente si no hay outgoing traffic en 1s |
 | **Graceful Disconnect** | P-3.6 | Cierre limpio iniciado por el cliente (vs Link Loss que es por timeout) |
+| **GameWorld** | P-3.7 | Contenedor autoritativo de simulación; posee el mapa id→ViegoEntity |
+| **pendingInput** | P-3.7 | `optional<InputPayload>` en RemoteClient; consumido una vez por tick via ForEachEstablished |
+| **ForEachEstablished** | P-3.7 | Iterador que expone el input del tick actual; limpia pendingInput tras el callback |
+| **tickID** | P-3.7 | Prefijo de 32 bits en el payload del Snapshot; el cliente Unreal lo usa para reconciliar predicción |
+| **Anti-cheat clamping** | P-3.7 | Clamp de dirección a [-1,1] + clamp de posición a ±500; el servidor ignora inputs imposibles |
+| **Modelo autoritativo** | P-3.7 | El cliente envía intención (dir), el servidor ejecuta la física y dicta la posición resultante |
 
 ---
 
@@ -377,12 +472,16 @@ struct RemoteClient {
 
 | Métrica | Valor |
 |---------|-------|
-| Tests totales | **106** (100% passing, Windows/MSVC) |
+| Tests totales | **157** (100% passing, Windows/MSVC) |
 | Wire format header | **104 bits** (13 bytes, fijo en todos los paquetes) |
 | Full sync payload | **~149 bits** (héroe completo, POS_BITS=16) |
+| Snapshot con tickID | **32 + ~149 bits** (full) / **32 + ~38–91 bits** (delta) |
 | Delta sin cambios | **38 bits** (networkID + 6 flags vacíos) |
 | Ahorro máximo delta | **~74%** vs full sync |
 | Precisión posición | **1.53cm** sobre mapa de 1000m (16 bits) |
+| InputPayload | **24 bits** (dirX:8, dirY:8, buttons:8) |
+| Velocidad máxima hero | **100 u/s** (kMoveSpeed) — cheats clampeados a 1.0 dir |
+| Map bounds | **±500 unidades** (kMapBound) — posición imposible de superar |
 | Session timeout | **10s** → zombie |
 | Zombie duration | **120s** → expiry |
 | Heartbeat interval | **1s** de silencio |
@@ -398,6 +497,9 @@ struct RemoteClient {
 - **Paquetes de un zombie**: recibidos en el default branch → `lastIncomingTime` se actualiza, pero los datos no se entregan al game layer. El jugador debe reconectarse via `ReconnectionRequest`.
 - **Dos clientes con mismo NetworkID**: imposible — `m_nextNetworkID` solo incrementa, nunca se reutiliza incluso tras desconexiones.
 - **ReconnectionRequest desde el endpoint antiguo**: el cliente zombie sigue en `m_establishedClients` bajo su old endpoint. `HandleReconnectionRequest` busca por networkID, no por endpoint — funciona correctamente incluso si el nuevo sender ES el mismo que el antiguo.
+- **ForEachEstablished + modificación del mapa**: el callback NO puede añadir ni eliminar clientes de `m_establishedClients` durante la iteración — invalidaría los iteradores. Documentado en comentario en el código. El `SetClientConnectedCallback` (que llama `AddHero`) se dispara desde el handshake path, no desde `ForEachEstablished`.
+- **RecordSnapshot antes de Send()**: `Send()` llama internamente a `seqContext.AdvanceLocal()`, lo que incrementa `localSequence`. Si grabamos la snapshot DESPUÉS de `Send()`, el seq en la historia no coincide con el que el cliente recibió. El orden correcto es `RecordSnapshot(usedSeq)` → `Send()`.
+- **m_lastClientAckedServerSeqValid = false en el primer tick**: la primera llamada a `SendSnapshot` no tiene aún ningún ACK del cliente → `GetBaseline` devuelve nullptr → full sync automático. Correcto: la primera snapshot siempre es full sync.
 
 ---
 
@@ -406,6 +508,7 @@ struct RemoteClient {
 - **Fiedler, G. (2016). *Packet Acks*** — la base exacta de nuestro ACK bitmask: https://gafferongames.com/post/packet_acks/
 - **Fiedler, G. (2018). *Reliable Ordered Messages*** — el sistema de tres canales que implementamos en P-3.3: https://gafferongames.com/post/reliable_ordered_messages/
 - **Fiedler, G. (2015). *Snapshot Compression*** — delta compression + cuantización, base de P-3.5: https://gafferongames.com/post/snapshot_compression/
+- **Fiedler, G. (2015). *State Synchronization*** — el modelo autoritativo Input→Simulate→Snapshot que implementamos en P-3.7: https://gafferongames.com/post/state_synchronization/
 - **Valve. *Source Multiplayer Networking*** — cómo CS:GO y TF2 gestionan la reconexión y el lag compensation, inspiración para P-3.6
 
 ---
@@ -622,9 +725,15 @@ nm.ProcessSessionKeepAlive(tBase + seconds(132));   // 132 - 11 = 121s > 120s �
 - Reenvío adaptativo basado en RTT EMA (mínimo 30ms)
 - Delta compression con ZigZag + VLE: -39% a -74% de bits según los cambios
 - Heartbeat automático, timeout a zombie (10s), expiry (120s), reconexión con token
-- 104 tests de regresión que validan todo el stack
+- GameWorld autoritativo: Input→Process→Snapshot pipeline a 100Hz
+- Anti-cheat clamping en dos niveles (dirección + posición)
+- tickID prefix en Snapshot para lag compensation (Fase 5)
+- 157 tests de regresión que validan todo el stack
 
-**Pendiente (Fase 4 — Stress Test):**
+**Pendiente (Fase 4+ — Brain & Stress Test):**
 - Validar el stack completo bajo condiciones de red adversas (pérdida de paquetes, latencia variable, reconexiones en cadena)
-- Integración con el plugin de Unreal Engine para validación end-to-end
-- Predictive AI / lag compensation (Fase 6) ya tiene los datos de clock offset listos desde P-3.4
+- P-4.4 Thread Pool dinámica para escalado bajo teamfight
+- Fase 5: Spatial Hashing (Interest Management) + Filtro de Kalman para predicción de trayectorias
+- Fase 5: Lag Compensation autoritativo (rewind de snapshots al ping del atacante)
+- Fase 6: Integración con el plugin de Unreal Engine para validación end-to-end
+- Fase 6: Entity Interpolation en cliente + Reconciliation visual (client prediction debug)
