@@ -36,7 +36,7 @@ cmake --build cmake-build-debug --config Debug
 
 ## Module Architecture
 
-Six CMake targets (5 static libraries + 2 executables):
+Six CMake production targets (4 static libraries + 2 executables), plus MiddlewareTests when BUILD_TESTS=ON:
 
 ```
 MiddlewareShared  (no deps)

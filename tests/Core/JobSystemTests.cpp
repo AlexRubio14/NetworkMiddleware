@@ -178,25 +178,24 @@ TEST(JobSystem, Execute_InlineFallback_WithZeroThreads) {
 
 // ─── Work-stealing ────────────────────────────────────────────────────────────
 
-// Verifies that stealing occurs when tasks accumulate faster than one thread
-// can drain them. We push 500 tasks rapidly and confirm at least one steal.
-TEST(JobSystem, WorkStealing_StealCountIncreasesUnderLoad) {
+// Validates that the pool handles high dispatch load without crashing or
+// losing tasks.  Stealing is an implementation detail that cannot be
+// asserted deterministically without injecting artificial timing; the
+// WorkStealingQueue unit tests (Push/Pop/Steal) cover the steal path directly.
+TEST(JobSystem, LoadTest_NoCrashUnderHighDispatch) {
     JobSystem js(4);
     constexpr int N = 500;
+    std::atomic<int> count{0};
     std::latch sync(N);
 
     for (int i = 0; i < N; ++i) {
-        js.Execute([&sync] {
-            // Minimal work so tasks queue up and stealing can occur.
+        js.Execute([&count, &sync] {
+            count.fetch_add(1, std::memory_order_relaxed);
             sync.count_down();
         });
     }
     sync.wait();
-
-    // At least some steals expected when 500 tasks are dispatched round-robin
-    // to 4 threads without any artificial delay.
-    // We accept 0 steals if tasks are dispatched evenly — the contract is "no crash".
-    EXPECT_GE(js.GetStealCount(), 0u);
+    EXPECT_EQ(count.load(), N);
 }
 
 // ─── Dynamic scaling ──────────────────────────────────────────────────────────
@@ -269,16 +268,30 @@ TEST(JobSystem, MaybeScale_UpscalesAfterInterval) {
     EXPECT_GT(js.GetThreadCount(), before);
 }
 
-// MaybeScale does NOT downscale immediately after upscale (hysteresis).
-TEST(JobSystem, MaybeScale_DownscaleRespectsCooldown) {
-    JobSystem js(3);
-    // Immediately try to downscale (no hysteresis time has passed).
+// MaybeScale must not downscale more than once within the hysteresis window.
+// On a machine with room above kMinThreads: start at kMinThreads+1, trigger one
+// downscale, then immediately run a second interval and verify the count held.
+TEST(JobSystem, MaybeScale_DownscaleHysteresis_BlocksSecondDownscale) {
+    if (HwMax() <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Machine has only " << HwMax()
+                     << " usable threads — cannot start above kMinThreads";
+
+    JobSystem js(JobSystem::kMinThreads + 1);
+    const size_t initial = js.GetThreadCount();
+    if (initial <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Pool clamped to kMinThreads on this machine";
+
+    // First downscale interval — should fire exactly once.
     for (uint32_t i = 0; i < JobSystem::kScaleCheckIntervalTicks; ++i)
         js.MaybeScale(JobSystem::kDownscaleThresholdMs - 1.0f);
+    const size_t afterFirst = js.GetThreadCount();
+    EXPECT_EQ(afterFirst, initial - 1u) << "First downscale should have fired";
 
-    // Downscale should be blocked by hysteresis (m_lastDownscaleTime = epoch).
-    // After the very first call the cooldown starts, so at most one downscale fires.
-    EXPECT_GE(js.GetThreadCount(), JobSystem::kMinThreads);
+    // Second interval immediately (hysteresis window still open) — must be blocked.
+    for (uint32_t i = 0; i < JobSystem::kScaleCheckIntervalTicks; ++i)
+        js.MaybeScale(JobSystem::kDownscaleThresholdMs - 1.0f);
+    EXPECT_EQ(js.GetThreadCount(), afterFirst)
+        << "Hysteresis should block second downscale within cooldown window";
 }
 
 // ─── Snapshot integrity ───────────────────────────────────────────────────────

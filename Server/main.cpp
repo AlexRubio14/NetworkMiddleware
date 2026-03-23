@@ -145,12 +145,22 @@ int main() {
         std::vector<uint8_t>  buffer;  // output filled by the worker job
     };
 
+    // Full-loop EMA for JobSystem scaling.
+    // NetworkProfiler::recentAvgTickMs only covers NetworkManager::Update(), which
+    // excludes GameWorld::Tick(), Phase A serialisation and Phase B send.  Feeding
+    // that partial metric to MaybeScale() could keep the pool undersized while the
+    // outer tick is already over budget.  We maintain a separate EMA here that
+    // covers the entire work window (steps 1-6, before sleep_until).
+    float loopEmaMs   = 0.0f;
+    constexpr float kLoopAlpha = 0.1f;
+
     auto nextTick = std::chrono::steady_clock::now();
 
     Logger::Log(LogLevel::Info, LogChannel::Core,
         "Game loop starting at 100 Hz (10ms tick budget). Ctrl+C to stop.");
 
     while (g_running.load(std::memory_order_relaxed)) {
+        const auto tickStart = std::chrono::steady_clock::now();
 
         // 1. Network I/O
         manager.Update();
@@ -186,6 +196,10 @@ int main() {
 
         if (!snapshots.empty()) {
             // Phase A — parallel serialization
+            // sync.wait() is an unbounded barrier; we poll try_wait() against the
+            // tick deadline to detect over-budget serialization early.  We always
+            // drain fully before entering Phase B — accessing task.buffer before
+            // all jobs complete would be UB (workers still write into the vector).
             std::latch sync(static_cast<std::ptrdiff_t>(snapshots.size()));
 
             for (auto& task : snapshots) {
@@ -195,7 +209,21 @@ int main() {
                 });
             }
 
-            sync.wait();  // ← main thread blocks until every job has finished
+            // Deadline-aware drain: detect over-budget without stranding tasks.
+            const auto phaseADeadline = nextTick + kTickInterval;
+            bool phaseAOverBudget = false;
+            while (!sync.try_wait()) {
+                if (std::chrono::steady_clock::now() >= phaseADeadline) {
+                    phaseAOverBudget = true;
+                    break;
+                }
+                std::this_thread::yield();
+            }
+            if (phaseAOverBudget) {
+                Logger::Log(LogLevel::Warning, LogChannel::Core,
+                    "Snapshot Phase A exceeded tick budget — waiting for worker drain");
+                sync.wait();  // correctness: must drain before touching task.buffer
+            }
 
             // Phase B — sequential commit + send
             for (auto& task : snapshots) {
@@ -205,6 +233,11 @@ int main() {
 
         // 5. Advance tick counter
         ++tickID;
+
+        // 6. Full-loop EMA — covers all work steps 1-5 before sleep.
+        const float fullTickMs = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - tickStart).count();
+        loopEmaMs = kLoopAlpha * fullTickMs + (1.0f - kLoopAlpha) * loopEmaMs;
 
         nextTick += kTickInterval;
 
@@ -217,8 +250,10 @@ int main() {
             nextTick = now;
         }
 
-        // 6. Dynamic thread-pool scaling (every kScaleCheckIntervalTicks ticks ≈ 1s)
-        jobSystem.MaybeScale(manager.GetProfilerSnapshot().recentAvgTickMs);
+        // 7. Dynamic thread-pool scaling using full-loop EMA (steps 1-5).
+        //    This signal includes GameWorld::Tick + Phase A + Phase B, giving
+        //    the scaler an accurate view of total CPU pressure per tick.
+        jobSystem.MaybeScale(loopEmaMs);
 
         std::this_thread::sleep_until(nextTick);
     }

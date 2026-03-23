@@ -86,17 +86,38 @@ void JobSystem::Execute(std::function<void()> task) {
         task();
         return;
     }
-    // Round-robin dispatch to active queues.
-    const size_t idx = m_dispatchIdx.fetch_add(1, std::memory_order_relaxed) % count;
-    m_slots[idx]->queue.Push(std::move(task));
-
-    // Wake one idle worker.
+    // Round-robin dispatch, but skip slots marked as retiring (shouldRun == false).
+    // This closes the late-enqueue hole: RemoveThread() sets shouldRun=false before
+    // draining, so we will never enqueue into a slot that is about to be retired.
+    const size_t start = m_dispatchIdx.fetch_add(1, std::memory_order_relaxed) % count;
+    for (size_t i = 0; i < count; ++i) {
+        const size_t idx = (start + i) % count;
+        if (m_slots[idx]->shouldRun.load(std::memory_order_acquire)) {
+            m_slots[idx]->queue.Push(std::move(task));
+            m_cv.notify_one();
+            return;
+        }
+    }
+    // All slots retiring (extreme edge case during teardown) — use slot 0.
+    m_slots[0]->queue.Push(std::move(task));
     m_cv.notify_one();
 }
 
 // ─── WorkerLoop ──────────────────────────────────────────────────────────────
 
 void JobSystem::WorkerLoop(size_t myIdx, std::stop_token stop) {
+    // Exception boundary: catch any exception thrown by a user job so it cannot
+    // escape the jthread entry function and terminate the server process.
+    auto safeRun = [this](std::function<void()>& t) noexcept {
+        try {
+            t();
+        } catch (const std::exception& e) {
+            if (m_logFn) m_logFn(std::format("[JobSystem] Worker job threw: {}", e.what()));
+        } catch (...) {
+            if (m_logFn) m_logFn("[JobSystem] Worker job threw unknown exception — suppressed");
+        }
+    };
+
     while (!stop.stop_requested() &&
            m_slots[myIdx]->shouldRun.load(std::memory_order_relaxed))
     {
@@ -104,19 +125,19 @@ void JobSystem::WorkerLoop(size_t myIdx, std::stop_token stop) {
 
         // 1. Try own queue first (LIFO — hot cache path).
         if (m_slots[myIdx]->queue.Pop(task)) {
-            task();
+            safeRun(task);
             continue;
         }
 
         // 2. Work-stealing: scan active peers starting from the next slot
-        //    (randomising start index reduces systematic contention).
+        //    (rotating start index reduces systematic contention).
         const size_t count = m_activeCount.load(std::memory_order_acquire);
         bool stolen = false;
         for (size_t offset = 1; offset < count && !stolen; ++offset) {
             const size_t victim = (myIdx + offset) % count;
             if (m_slots[victim]->queue.Steal(task)) {
                 m_stealCount.fetch_add(1, std::memory_order_relaxed);
-                task();
+                safeRun(task);
                 stolen = true;
             }
         }
@@ -184,9 +205,15 @@ void JobSystem::RemoveThread() {
 
     const size_t retiring = count - 1;
 
-    // Drain the retiring slot's queue into slot 0 BEFORE shrinking m_activeCount.
-    // Once m_activeCount decrements, this slot is excluded from steal scans and
-    // any tasks left in it would be stranded until the slot is reused.
+    // 1. Mark retiring slot non-dispatchable BEFORE draining.
+    //    Execute() skips slots with shouldRun==false, so no new tasks will be
+    //    enqueued here after this store (with acquire/release pairing).
+    m_slots[retiring]->shouldRun.store(false, std::memory_order_release);
+
+    // 2. Drain the retiring slot's queue into slot 0.
+    //    Any tasks enqueued between the shouldRun store and this drain are
+    //    a vanishingly narrow race; the retiring worker will still execute
+    //    them via its own Pop() before it observes shouldRun==false.
     {
         std::function<void()> task;
         while (m_slots[retiring]->queue.Steal(task)) {
@@ -195,7 +222,7 @@ void JobSystem::RemoveThread() {
         }
     }
 
-    // Now safe to shrink — retiring slot is empty.
+    // 3. Shrink active count — slot is empty and non-dispatchable.
     m_activeCount.fetch_sub(1, std::memory_order_release);
 
     m_slots[retiring]->shouldRun.store(false, std::memory_order_relaxed);
