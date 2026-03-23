@@ -90,6 +90,12 @@ namespace NetworkMiddleware::Core {
         void HandleReconnectionRequest(Shared::BitReader& reader, const Shared::EndPoint& sender);
         void SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token);
 
+        // P-4.4 Split-Phase internal helper — const, no side effects.
+        // Builds the wire payload for a snapshot without touching RemoteClient state.
+        std::vector<uint8_t> SerializeSnapshot(const RemoteClient& client,
+                                               const Shared::Data::HeroState& state,
+                                               uint32_t tickID) const;
+
     public:
         explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport);
 
@@ -130,9 +136,27 @@ namespace NetworkMiddleware::Core {
         // Selects the best available baseline from m_lastClientAckedServerSeq;
         // falls back to a full Serialize() if no valid baseline exists.
         // Records the sent snapshot for future delta baselines.
+        // Single-threaded convenience path (wraps the two Split-Phase methods below).
         void SendSnapshot(const Shared::EndPoint& to,
                           const Shared::Data::HeroState& state,
                           uint32_t tickID);
+
+        // P-4.4 Split-Phase API — see NetworkManager.cpp for threading contract.
+
+        // Phase A (parallel-safe): serializes state into a wire buffer.
+        // Read-only on all shared state; safe to call from Job System worker threads
+        // while the main thread is blocked on std::latch::wait().
+        // Returns an empty vector if `to` is not an established client.
+        std::vector<uint8_t> SerializeSnapshotFor(const Shared::EndPoint& to,
+                                                   const Shared::Data::HeroState& state,
+                                                   uint32_t tickID) const;
+
+        // Phase B (main-thread only): records the snapshot in history and sends
+        // the pre-built payload over the transport.  Must be called after
+        // std::latch::wait() guarantees that Phase A has completed.
+        void CommitAndSendSnapshot(const Shared::EndPoint& to,
+                                   const Shared::Data::HeroState& state,
+                                   const std::vector<uint8_t>& payload);
 
         // Iterate all non-zombie established clients.
         // Callback receives: (networkID, endpoint, pendingInput or nullptr).

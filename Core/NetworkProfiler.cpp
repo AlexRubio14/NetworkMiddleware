@@ -24,6 +24,20 @@ namespace NetworkMiddleware::Core {
     void NetworkProfiler::RecordTick(uint64_t microseconds) noexcept {
         m_tickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
         m_tickCount.fetch_add(1, std::memory_order_relaxed);
+
+        // P-4.4: EMA(α=0.1) — single-threaded write, relaxed ordering sufficient.
+        const float current = static_cast<float>(microseconds);
+        const float old     = m_recentAvgTickUs.load(std::memory_order_relaxed);
+        m_recentAvgTickUs.store(kEmaAlpha * current + (1.0f - kEmaAlpha) * old,
+                                std::memory_order_relaxed);
+    }
+
+    float NetworkProfiler::GetRecentAvgTickUs() const noexcept {
+        return m_recentAvgTickUs.load(std::memory_order_relaxed);
+    }
+
+    void NetworkProfiler::SetRecentAvgTickUsForTest(float valueUs) noexcept {
+        m_recentAvgTickUs.store(valueUs, std::memory_order_relaxed);
     }
 
     // ── GetSnapshot ───────────────────────────────────────────────────────────
@@ -36,9 +50,10 @@ namespace NetworkMiddleware::Core {
 
         const uint32_t ticks = m_tickCount.load(std::memory_order_relaxed);
         const uint64_t accum = m_tickTimeAccumUs.load(std::memory_order_relaxed);
-        s.avgTickTimeUs = (ticks > 0)
+        s.avgTickTimeUs  = (ticks > 0)
             ? static_cast<float>(accum) / static_cast<float>(ticks)
             : 0.0f;
+        s.recentAvgTickMs = m_recentAvgTickUs.load(std::memory_order_relaxed) / 1000.0f;
 
         // Delta Efficiency = 1 - (avg_bytes_sent_per_tick / theoretical_full_sync_bytes_per_tick)
         // theoretical = kFullSyncBytesPerClient * connectedClients per tick
