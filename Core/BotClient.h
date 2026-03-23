@@ -65,6 +65,10 @@ namespace NetworkMiddleware::Core {
         // Helper: build a header-only packet and send it, then advance the local sequence.
         void SendHeaderOnly(Shared::PacketType type);
 
+        // P-4.5 Packet Integrity — single chokepoint for all outgoing sends.
+        // Appends a 4-byte CRC32 trailer (little-endian) before calling m_transport->Send().
+        void SendBytes(const std::vector<uint8_t>& wireBytes);
+
         std::shared_ptr<Shared::ITransport> m_transport;
         Shared::EndPoint                    m_serverEndpoint;
 

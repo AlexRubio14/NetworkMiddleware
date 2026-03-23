@@ -5,6 +5,7 @@
 #include "Shared/Network/InputPackets.h"
 #include "Shared/Serialization/BitReader.h"
 #include "Shared/Serialization/BitWriter.h"
+#include "Shared/Serialization/CRC32.h"
 #include "MockTransport.h"
 #include <cmath>
 
@@ -19,6 +20,21 @@ static EndPoint MakeEp(uint16_t port = 9001) {
     return EndPoint{0x0100007F, port};
 }
 
+static std::vector<uint8_t> WithCRC(std::vector<uint8_t> data) {
+    const uint32_t crc = ComputeCRC32(data);
+    data.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+    return data;
+}
+
+static std::vector<uint8_t> StripCRC(const std::vector<uint8_t>& data) {
+    return data.size() >= 4
+        ? std::vector<uint8_t>(data.begin(), data.end() - 4)
+        : data;
+}
+
 static std::vector<uint8_t> MakeHeaderOnly(PacketType type, uint16_t seq = 0,
                                             uint16_t ack = 0) {
     BitWriter w;
@@ -27,7 +43,7 @@ static std::vector<uint8_t> MakeHeaderOnly(PacketType type, uint16_t seq = 0,
     h.ack      = ack;
     h.type     = static_cast<uint8_t>(type);
     h.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static std::vector<uint8_t> MakeChallengeResponse(uint64_t salt, uint16_t seq = 0) {
@@ -37,7 +53,7 @@ static std::vector<uint8_t> MakeChallengeResponse(uint64_t salt, uint16_t seq = 
     h.type     = static_cast<uint8_t>(PacketType::ChallengeResponse);
     h.Write(w);
     ChallengeResponsePayload{salt}.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 // Completes full handshake and returns the assigned NetworkID.
@@ -45,8 +61,8 @@ static uint16_t DoHandshake(MockTransport& t, NetworkManager& nm, const EndPoint
     t.InjectPacket(MakeHeaderOnly(PacketType::ConnectionRequest), ep);
     nm.Update();
 
-    auto& cpkt = t.sentPackets.back().first;
-    BitReader cr(cpkt, cpkt.size() * 8);
+    const auto cpktStripped = StripCRC(t.sentPackets.back().first);
+    BitReader cr(cpktStripped, cpktStripped.size() * 8);
     PacketHeader::Read(cr);
     const auto challenge = ChallengePayload::Read(cr);
     t.sentPackets.clear();
@@ -54,8 +70,8 @@ static uint16_t DoHandshake(MockTransport& t, NetworkManager& nm, const EndPoint
     t.InjectPacket(MakeChallengeResponse(challenge.salt), ep);
     nm.Update();
 
-    auto& apkt = t.sentPackets.back().first;
-    BitReader ar(apkt, apkt.size() * 8);
+    const auto apktStripped = StripCRC(t.sentPackets.back().first);
+    BitReader ar(apktStripped, apktStripped.size() * 8);
     PacketHeader::Read(ar);
     const auto accepted = ConnectionAcceptedPayload::Read(ar);
     t.sentPackets.clear();
@@ -205,9 +221,9 @@ TEST(GameWorld, SendSnapshot_ContainsTickID) {
     nm.SendSnapshot(ep, state, testTickID);
     ASSERT_FALSE(transport->sentPackets.empty());
 
-    // Find the Snapshot packet (last sent)
-    const auto& pkt = transport->sentPackets.back().first;
-    BitReader r(pkt, pkt.size() * 8);
+    // Find the Snapshot packet (last sent) — strip CRC trailer before parsing
+    const auto pktStripped = StripCRC(transport->sentPackets.back().first);
+    BitReader r(pktStripped, pktStripped.size() * 8);
     const auto hdr = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(hdr.type), PacketType::Snapshot);
 
@@ -232,8 +248,8 @@ TEST(GameWorld, SendSnapshot_TickIDIncrements) {
         nm.SendSnapshot(ep, state, tick);
 
         ASSERT_FALSE(transport->sentPackets.empty());
-        const auto& pkt = transport->sentPackets.back().first;
-        BitReader r(pkt, pkt.size() * 8);
+        const auto pktStripped2 = StripCRC(transport->sentPackets.back().first);
+        BitReader r(pktStripped2, pktStripped2.size() * 8);
         PacketHeader::Read(r);
 
         const uint32_t readTickID = r.ReadBits(32);
@@ -257,7 +273,7 @@ TEST(GameWorld, ForEachEstablished_ReceivesBufferedInput) {
     h.type     = static_cast<uint8_t>(PacketType::Input);
     h.Write(w);
     InputPayload{0.5f, -0.5f, 0}.Write(w);
-    transport->InjectPacket(w.GetCompressedData(), ep);
+    transport->InjectPacket(WithCRC(w.GetCompressedData()), ep);
 
     nm.Update();  // Input is buffered, NOT delivered via data callback
 
@@ -293,7 +309,7 @@ TEST(GameWorld, ForEachEstablished_MultipleClients_PartialInput) {
     h.type     = static_cast<uint8_t>(PacketType::Input);
     h.Write(w);
     InputPayload{1.0f, 0.0f, 0}.Write(w);
-    transport->InjectPacket(w.GetCompressedData(), epA);
+    transport->InjectPacket(WithCRC(w.GetCompressedData()), epA);
 
     nm.Update();
 
@@ -323,7 +339,7 @@ TEST(GameWorld, ForEachEstablished_InputClearedAfterCallback) {
     h.type     = static_cast<uint8_t>(PacketType::Input);
     h.Write(w);
     InputPayload{1.0f, 0.0f, 0}.Write(w);
-    transport->InjectPacket(w.GetCompressedData(), ep);
+    transport->InjectPacket(WithCRC(w.GetCompressedData()), ep);
     nm.Update();
 
     // First call consumes the input

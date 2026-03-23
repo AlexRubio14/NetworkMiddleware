@@ -58,9 +58,10 @@ TEST(NetworkProfiler, RecordTick_NoTicks_AvgIsZero) {
 //
 // Asserts the constant independently of any other test that uses it.
 // A bad change to the constant would keep DeltaEfficiency tests green but fail here,
-// catching protocol-size regressions. Value: 149 bits / 8 = 18.625 → ceiling = 19.
-TEST(NetworkProfiler, kFullSyncBytesPerClient_Is19) {
-    EXPECT_EQ(NetworkProfiler::kFullSyncBytesPerClient, 19u);
+// catching protocol-size regressions. Value: 149 bits / 8 = 18.625 → ceiling = 19 bytes payload
+// + 4 bytes CRC32 trailer (P-4.5) = 23 bytes total on the wire.
+TEST(NetworkProfiler, kFullSyncBytesPerClient_Is23) {
+    EXPECT_EQ(NetworkProfiler::kFullSyncBytesPerClient, 23u);
 }
 
 // ─── DeltaEfficiency ─────────────────────────────────────────────────────────

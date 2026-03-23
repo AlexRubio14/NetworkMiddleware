@@ -15,6 +15,7 @@ add_library(MiddlewareShared STATIC
         Serialization/BitWriter.cpp
         Serialization/BitReader.h
         Serialization/BitReader.cpp
+        Serialization/CRC32.h
         INetworkable.h
         Data/HeroState.h
         Gameplay/IHero.h

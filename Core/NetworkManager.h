@@ -96,6 +96,11 @@ namespace NetworkMiddleware::Core {
                                                const Shared::Data::HeroState& state,
                                                uint32_t tickID) const;
 
+        // P-4.5 Packet Integrity — single chokepoint for all outgoing sends.
+        // Appends a 4-byte CRC32 trailer, calls m_transport->Send(), and records bytes sent.
+        // All send paths in NetworkManager must use this instead of m_transport->Send() directly.
+        void SendRaw(const std::vector<uint8_t>& wireBytes, const Shared::EndPoint& to);
+
     public:
         explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport);
 

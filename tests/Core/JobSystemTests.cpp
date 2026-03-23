@@ -20,6 +20,7 @@
 #include "Shared/Network/HandshakePackets.h"
 #include "Shared/Serialization/BitReader.h"
 #include "Shared/Serialization/BitWriter.h"
+#include "Shared/Serialization/CRC32.h"
 #include "MockTransport.h"
 
 using namespace NetworkMiddleware;
@@ -33,13 +34,28 @@ static EndPoint MakeEp(uint16_t port) {
     return EndPoint{0x0100007F, port};
 }
 
+static std::vector<uint8_t> WithCRC(std::vector<uint8_t> data) {
+    const uint32_t crc = ComputeCRC32(data);
+    data.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+    return data;
+}
+
+static std::vector<uint8_t> StripCRC(const std::vector<uint8_t>& data) {
+    return data.size() >= 4
+        ? std::vector<uint8_t>(data.begin(), data.end() - 4)
+        : data;
+}
+
 static std::vector<uint8_t> MakeHeaderOnly(PacketType type, uint16_t seq = 0) {
     BitWriter w;
     PacketHeader h;
     h.sequence = seq;
     h.type     = static_cast<uint8_t>(type);
     h.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static std::vector<uint8_t> MakeChallengeResponse(uint64_t salt) {
@@ -48,7 +64,7 @@ static std::vector<uint8_t> MakeChallengeResponse(uint64_t salt) {
     h.type = static_cast<uint8_t>(PacketType::ChallengeResponse);
     h.Write(w);
     ChallengeResponsePayload{salt}.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 // Completes a full handshake and returns the assigned NetworkID.
@@ -56,8 +72,8 @@ static uint16_t DoHandshake(MockTransport& t, NetworkManager& nm, const EndPoint
     t.InjectPacket(MakeHeaderOnly(PacketType::ConnectionRequest), ep);
     nm.Update();
 
-    auto& challengePkt = t.sentPackets.back().first;
-    BitReader cr(challengePkt, challengePkt.size() * 8);
+    const auto challengeStripped = StripCRC(t.sentPackets.back().first);
+    BitReader cr(challengeStripped, challengeStripped.size() * 8);
     PacketHeader::Read(cr);
     const auto challenge = ChallengePayload::Read(cr);
     t.sentPackets.clear();
@@ -65,8 +81,8 @@ static uint16_t DoHandshake(MockTransport& t, NetworkManager& nm, const EndPoint
     t.InjectPacket(MakeChallengeResponse(challenge.salt), ep);
     nm.Update();
 
-    auto& acceptPkt = t.sentPackets.back().first;
-    BitReader ar(acceptPkt, acceptPkt.size() * 8);
+    const auto acceptStripped = StripCRC(t.sentPackets.back().first);
+    BitReader ar(acceptStripped, acceptStripped.size() * 8);
     PacketHeader::Read(ar);
     const auto accepted = ConnectionAcceptedPayload::Read(ar);
     t.sentPackets.clear();

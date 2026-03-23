@@ -1,12 +1,33 @@
 #include <gtest/gtest.h>
 #include "Core/NetworkManager.h"
 #include "Shared/Network/HandshakePackets.h"
+#include "Shared/Serialization/CRC32.h"
 #include "MockTransport.h"
 
 using namespace NetworkMiddleware;
 using namespace NetworkMiddleware::Core;
 using namespace NetworkMiddleware::Shared;
 using namespace NetworkMiddleware::Tests;
+
+// ─── CRC test helpers ─────────────────────────────────────────────────────────
+// P-4.5: All outgoing packets now carry a 4-byte CRC32 trailer.
+// WithCRC() appends it to injected packets; StripCRC() removes it when reading
+// back sent packets before constructing a BitReader.
+
+static std::vector<uint8_t> WithCRC(std::vector<uint8_t> data) {
+    const uint32_t crc = ComputeCRC32(data);
+    data.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+    return data;
+}
+
+static std::vector<uint8_t> StripCRC(const std::vector<uint8_t>& data) {
+    return data.size() >= 4
+        ? std::vector<uint8_t>(data.begin(), data.end() - 4)
+        : data;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -16,7 +37,7 @@ static std::vector<uint8_t> MakeHeaderOnlyPacket(PacketType type, uint16_t seq =
     h.sequence = seq;
     h.type     = static_cast<uint8_t>(type);
     h.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static std::vector<uint8_t> MakeChallengeResponsePacket(uint64_t salt, uint16_t seq = 0) {
@@ -26,7 +47,7 @@ static std::vector<uint8_t> MakeChallengeResponsePacket(uint64_t salt, uint16_t 
     h.type     = static_cast<uint8_t>(PacketType::ChallengeResponse);
     h.Write(w);
     ChallengeResponsePayload{salt}.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static EndPoint MakeEndpoint(uint32_t addr = 0x0100007F, uint16_t port = 9000) {
@@ -40,9 +61,9 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     nm.Update();
     EXPECT_GE(t.sentPackets.size(), 1u);
 
-    // Step 2 — Read challenge salt
-    auto& challengePkt = t.sentPackets.back().first;
-    BitReader cr(challengePkt, challengePkt.size() * 8);
+    // Step 2 — Read challenge salt (strip CRC trailer before parsing)
+    const auto challengeStripped = StripCRC(t.sentPackets.back().first);
+    BitReader cr(challengeStripped, challengeStripped.size() * 8);
     PacketHeader::Read(cr);
     const auto challenge = ChallengePayload::Read(cr);
     t.sentPackets.clear();
@@ -52,9 +73,9 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     nm.Update();
     EXPECT_GE(t.sentPackets.size(), 1u);
 
-    // Step 4 — Read NetworkID
-    auto& acceptPkt = t.sentPackets.back().first;
-    BitReader ar(acceptPkt, acceptPkt.size() * 8);
+    // Step 4 — Read NetworkID (strip CRC trailer before parsing)
+    const auto acceptStripped = StripCRC(t.sentPackets.back().first);
+    BitReader ar(acceptStripped, acceptStripped.size() * 8);
     PacketHeader::Read(ar);
     const auto accepted = ConnectionAcceptedPayload::Read(ar);
     t.sentPackets.clear();
@@ -72,7 +93,8 @@ TEST(NetworkManager, ConnectionRequest_SendsChallenge) {
     nm.Update();
 
     ASSERT_EQ(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets[0].first, t->sentPackets[0].first.size() * 8);
+    const auto pkt0 = StripCRC(t->sentPackets[0].first);
+    BitReader r(pkt0, pkt0.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionChallenge);
 }
@@ -103,7 +125,8 @@ TEST(NetworkManager, WrongSalt_SendsDeniedAndRejectsClient) {
     nm.Update();
 
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets[0].first, t->sentPackets[0].first.size() * 8);
+    const auto deniedPkt = StripCRC(t->sentPackets[0].first);
+    BitReader r(deniedPkt, deniedPkt.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
     EXPECT_EQ(nm.GetEstablishedCount(), 0u);
@@ -314,16 +337,16 @@ TEST(NetworkManager, ChallengeResponse_DeniedWhenServerFull) {
 
     t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep1);
     nm.Update();
-    auto& c1Pkt = t->sentPackets.back().first;
-    BitReader cr1(c1Pkt, c1Pkt.size() * 8);
+    const auto c1Stripped = StripCRC(t->sentPackets.back().first);
+    BitReader cr1(c1Stripped, c1Stripped.size() * 8);
     PacketHeader::Read(cr1);
     const uint64_t salt1 = ChallengePayload::Read(cr1).salt;
     t->sentPackets.clear();
 
     t->InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep2);
     nm.Update();
-    auto& c2Pkt = t->sentPackets.back().first;
-    BitReader cr2(c2Pkt, c2Pkt.size() * 8);
+    const auto c2Stripped = StripCRC(t->sentPackets.back().first);
+    BitReader cr2(c2Stripped, c2Stripped.size() * 8);
     PacketHeader::Read(cr2);
     const uint64_t salt2 = ChallengePayload::Read(cr2).salt;
     t->sentPackets.clear();
@@ -339,4 +362,74 @@ TEST(NetworkManager, ChallengeResponse_DeniedWhenServerFull) {
     const bool ep1Ok = nm.GetClientNetworkStats(ep1).has_value();
     const bool ep2Ok = nm.GetClientNetworkStats(ep2).has_value();
     EXPECT_NE(ep1Ok, ep2Ok);  // exactly one accepted, one denied
+}
+
+// ─── P-4.5 CRC32 Packet Integrity ────────────────────────────────────────────
+
+// All packets sent by NetworkManager must carry a valid 4-byte CRC32 trailer.
+TEST(NetworkManager, Send_AppendsCRC_TrailerValid) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    const EndPoint ep = MakeEndpoint();
+    CompleteHandshake(*t, nm, ep);
+    t->sentPackets.clear();
+
+    nm.Send(ep, {0x01, 0x02, 0x03}, PacketType::Snapshot);
+
+    ASSERT_EQ(t->sentPackets.size(), 1u);
+    const auto& wire = t->sentPackets[0].first;
+    ASSERT_GE(wire.size(), 4u);
+
+    // Extract the last 4 bytes as little-endian CRC
+    const size_t n = wire.size() - 4;
+    const uint32_t trailerCRC =
+          static_cast<uint32_t>(wire[n + 0])
+        | static_cast<uint32_t>(wire[n + 1]) <<  8
+        | static_cast<uint32_t>(wire[n + 2]) << 16
+        | static_cast<uint32_t>(wire[n + 3]) << 24;
+
+    // Compute CRC over the bytes preceding the trailer
+    EXPECT_EQ(trailerCRC, ComputeCRC32(wire.data(), n));
+}
+
+// A received packet whose CRC has been tampered with must be silently discarded.
+// The data callback must NOT fire, and the profiler must count 1 CRC error.
+TEST(NetworkManager, Receive_BitFlip_Discarded) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    bool received = false;
+    nm.SetDataCallback([&](const PacketHeader&, BitReader&, const EndPoint&) { received = true; });
+
+    const EndPoint ep = MakeEndpoint();
+    CompleteHandshake(*t, nm, ep);
+
+    // Build a valid Snapshot packet (with CRC) then flip one bit in the payload
+    auto pkt = MakeHeaderOnlyPacket(PacketType::Snapshot, 1);
+    pkt[4] ^= 0x01u;  // tamper with a byte inside the header region
+
+    t->InjectPacket(pkt, ep);
+    nm.Update();
+
+    EXPECT_FALSE(received);
+    EXPECT_EQ(nm.GetProfilerSnapshot().crcErrors, 1u);
+}
+
+// A packet with a correct CRC must be accepted and delivered normally.
+TEST(NetworkManager, Receive_ValidCRC_Accepted) {
+    auto t = std::make_shared<MockTransport>();
+    NetworkManager nm(t);
+
+    bool received = false;
+    nm.SetDataCallback([&](const PacketHeader&, BitReader&, const EndPoint&) { received = true; });
+
+    const EndPoint ep = MakeEndpoint();
+    CompleteHandshake(*t, nm, ep);
+
+    t->InjectPacket(MakeHeaderOnlyPacket(PacketType::Snapshot, 1), ep);
+    nm.Update();
+
+    EXPECT_TRUE(received);
+    EXPECT_EQ(nm.GetProfilerSnapshot().crcErrors, 0u);
 }

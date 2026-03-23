@@ -2,6 +2,9 @@
 #include "Core/BotClient.h"
 #include "Core/NetworkManager.h"
 #include "Core/MockTransport.h"
+#include "Shared/Network/HandshakePackets.h"
+#include "Shared/Serialization/BitWriter.h"
+#include "Shared/Serialization/CRC32.h"
 
 using namespace NetworkMiddleware;
 using namespace NetworkMiddleware::Core;
@@ -159,4 +162,40 @@ TEST(BotIntegration, SendInput_AllInputsDeliveredViaForEachEstablished) {
     }
 
     EXPECT_EQ(deliveredCount, 5);
+}
+
+// ─── P-4.5: CRC32 integrity ───────────────────────────────────────────────────
+
+// A packet with an all-zeros CRC trailer must be silently discarded by BotClient.
+// The bot's state must remain Established (not crash, not disconnect).
+TEST(BotIntegration, BotClient_CorruptedPacket_Discarded) {
+    auto serverT = std::make_shared<MockTransport>();
+    auto botT    = std::make_shared<MockTransport>();
+    NetworkManager nm(serverT);
+    BotClient      bot(botT, kServerEp);
+
+    DoFullHandshake(*serverT, nm, *botT, bot);
+    ASSERT_EQ(bot.GetState(), BotClient::State::Established);
+
+    // Build a valid Heartbeat packet body (header only, no payload).
+    BitWriter w;
+    PacketHeader h;
+    h.sequence = 10;
+    h.type     = static_cast<uint8_t>(PacketType::Heartbeat);
+    h.Write(w);
+    std::vector<uint8_t> pkt = w.GetCompressedData();
+
+    // Append an all-zeros CRC trailer — this is NOT the real CRC.
+    pkt.push_back(0x00);
+    pkt.push_back(0x00);
+    pkt.push_back(0x00);
+    pkt.push_back(0x00);
+
+    // Inject the corrupted packet directly into the bot's receive queue.
+    botT->InjectPacket(pkt, kServerEp);
+
+    // BotClient::Update() must discard the packet and remain Established.
+    bot.Update();
+
+    EXPECT_EQ(bot.GetState(), BotClient::State::Established);
 }

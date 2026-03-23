@@ -17,6 +17,7 @@ add_executable(MiddlewareTests
     Shared/NetworkOptimizerTests.cpp
     Shared/HeroSerializerTests.cpp
     Shared/DeltaCompressionTests.cpp
+    Core/CRC32Tests.cpp
     Core/NetworkManagerTests.cpp
     Core/SessionRecoveryTests.cpp
     Core/BotIntegrationTests.cpp
