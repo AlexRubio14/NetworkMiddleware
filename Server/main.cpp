@@ -110,8 +110,11 @@ int main() {
 
     // ── P-4.4 Job System ──────────────────────────────────────────────────────
     // Start with kMinThreads (2). MaybeScale() grows/shrinks based on EMA load.
+    // Logger callback injected here so JobSystem stays free of global-state deps.
 
-    JobSystem jobSystem;
+    JobSystem jobSystem(JobSystem::kMinThreads, [](const std::string& msg) {
+        Logger::Log(LogLevel::Info, LogChannel::Core, msg);
+    });
 
     Logger::Log(LogLevel::Info, LogChannel::Core,
         std::format("[JobSystem] Started with {} worker threads (max=hardware_concurrency-1)",

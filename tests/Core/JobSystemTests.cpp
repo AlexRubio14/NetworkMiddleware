@@ -201,18 +201,36 @@ TEST(JobSystem, WorkStealing_StealCountIncreasesUnderLoad) {
 
 // ─── Dynamic scaling ──────────────────────────────────────────────────────────
 
+// Helper: computes the same m_maxThreads formula used by JobSystem.
+static size_t HwMax() {
+    const size_t hw = static_cast<size_t>(std::thread::hardware_concurrency());
+    return std::max(JobSystem::kMinThreads, hw > 1u ? hw - 1u : JobSystem::kMinThreads);
+}
+
 TEST(JobSystem, ForceAddThread_IncreasesCount) {
-    JobSystem js(2);
-    ASSERT_EQ(js.GetThreadCount(), 2u);
+    if (HwMax() <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Machine has only " << HwMax()
+                     << " usable threads — no room to upscale above kMinThreads";
+
+    JobSystem js(JobSystem::kMinThreads);
+    const size_t before = js.GetThreadCount();
     js.ForceAddThread();
-    EXPECT_EQ(js.GetThreadCount(), 3u);
+    EXPECT_EQ(js.GetThreadCount(), before + 1);
 }
 
 TEST(JobSystem, ForceRemoveThread_DecreasesCount) {
-    JobSystem js(3);
-    ASSERT_EQ(js.GetThreadCount(), 3u);
+    if (HwMax() <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Machine has only " << HwMax()
+                     << " usable threads — cannot start above kMinThreads";
+
+    // Start one thread above min so there is room to remove.
+    JobSystem js(JobSystem::kMinThreads + 1);
+    const size_t actual = js.GetThreadCount();   // clamped by HwMax if needed
+    if (actual <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Pool clamped to kMinThreads on this machine";
+
     js.ForceRemoveThread();
-    EXPECT_EQ(js.GetThreadCount(), 2u);
+    EXPECT_EQ(js.GetThreadCount(), actual - 1);
 }
 
 TEST(JobSystem, ForceRemoveThread_ClampsAtMinThreads) {
@@ -237,6 +255,10 @@ TEST(JobSystem, ForceAddThread_ClampsAtMaxThreads) {
 // MaybeScale upscales once the check interval is reached with high load.
 // We call it kScaleCheckIntervalTicks times with recentAvgTickMs > threshold.
 TEST(JobSystem, MaybeScale_UpscalesAfterInterval) {
+    if (HwMax() <= JobSystem::kMinThreads)
+        GTEST_SKIP() << "Machine has only " << HwMax()
+                     << " usable threads — no room to upscale above kMinThreads";
+
     JobSystem js(JobSystem::kMinThreads);
     const size_t before = js.GetThreadCount();
 

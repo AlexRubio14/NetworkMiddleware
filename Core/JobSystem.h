@@ -73,9 +73,16 @@ public:
     static constexpr auto     kHysteresisDuration        = std::chrono::seconds(5);
     static constexpr uint32_t kScaleCheckIntervalTicks   = 100;  // ~1s at 100 Hz
 
+    // Logging callback injected at construction time.
+    // Follows the project's no-global-state rule: JobSystem emits scale events
+    // through this callback rather than calling the Logger singleton directly.
+    // Pass nullptr (default) to silence scale-event logging (e.g. in tests).
+    using ScaleLogFn = std::function<void(const std::string& msg)>;
+
     // Constructs the pool with `initialThreads` active workers.
     // Pre-allocates slots up to hardware_concurrency-1 (min kMinThreads).
-    explicit JobSystem(size_t initialThreads = kMinThreads);
+    // logFn: optional callback for scale-event messages (nullptr = silent).
+    explicit JobSystem(size_t initialThreads = kMinThreads, ScaleLogFn logFn = nullptr);
 
     // Destructor: requests stop on all active threads and joins them.
     ~JobSystem();
@@ -109,6 +116,7 @@ private:
     };
 
     // ── Members ───────────────────────────────────────────────────────────────
+    ScaleLogFn                                   m_logFn;
     const size_t                                 m_maxThreads;
     std::vector<std::unique_ptr<WorkerSlot>>     m_slots;       // pre-allocated, never reallocated
     std::atomic<size_t>                          m_activeCount{0};

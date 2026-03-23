@@ -1,7 +1,6 @@
 // Core/JobSystem.cpp — P-4.4 Dynamic Work-Stealing Job System
 
 #include "JobSystem.h"
-#include "../Shared/Log/Logger.h"
 #include <algorithm>
 #include <format>
 
@@ -42,7 +41,8 @@ size_t WorkStealingQueue::Size() const {
 
 // ─── JobSystem ────────────────────────────────────────────────────────────────
 
-JobSystem::JobSystem(size_t initialThreads) :
+JobSystem::JobSystem(size_t initialThreads, ScaleLogFn logFn) :
+    m_logFn(std::move(logFn)),
     m_maxThreads(std::max(kMinThreads,
                           static_cast<size_t>(std::thread::hardware_concurrency()) > 1
                               ? static_cast<size_t>(std::thread::hardware_concurrency()) - 1u
@@ -144,8 +144,8 @@ void JobSystem::MaybeScale(float recentAvgTickMs) {
 
     if (recentAvgTickMs > kUpscaleThresholdMs && count < m_maxThreads) {
         AddThread();
-        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-            std::format("[JobSystem] Upscale: {} → {} threads (avgTick={:.2f}ms)",
+        if (m_logFn)
+            m_logFn(std::format("[JobSystem] Upscale: {} → {} threads (avgTick={:.2f}ms)",
                 count, count + 1, recentAvgTickMs));
         return;
     }
@@ -156,8 +156,8 @@ void JobSystem::MaybeScale(float recentAvgTickMs) {
             return;  // Hysteresis: too soon after last downscale
         m_lastDownscaleTime = now;
         RemoveThread();
-        Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
-            std::format("[JobSystem] Downscale: {} → {} threads (avgTick={:.2f}ms)",
+        if (m_logFn)
+            m_logFn(std::format("[JobSystem] Downscale: {} → {} threads (avgTick={:.2f}ms)",
                 count, count - 1, recentAvgTickMs));
     }
 }
@@ -182,17 +182,28 @@ void JobSystem::RemoveThread() {
     const size_t count = m_activeCount.load(std::memory_order_relaxed);
     if (count <= kMinThreads) return;
 
-    const size_t idx = count - 1;
+    const size_t retiring = count - 1;
 
-    // Decrement BEFORE stopping so the thread stops stealing from peers.
+    // Drain the retiring slot's queue into slot 0 BEFORE shrinking m_activeCount.
+    // Once m_activeCount decrements, this slot is excluded from steal scans and
+    // any tasks left in it would be stranded until the slot is reused.
+    {
+        std::function<void()> task;
+        while (m_slots[retiring]->queue.Steal(task)) {
+            m_slots[0]->queue.Push(std::move(task));
+            m_cv.notify_one();
+        }
+    }
+
+    // Now safe to shrink — retiring slot is empty.
     m_activeCount.fetch_sub(1, std::memory_order_release);
 
-    m_slots[idx]->shouldRun.store(false, std::memory_order_relaxed);
-    if (m_slots[idx]->thread) {
-        m_slots[idx]->thread->request_stop();
+    m_slots[retiring]->shouldRun.store(false, std::memory_order_relaxed);
+    if (m_slots[retiring]->thread) {
+        m_slots[retiring]->thread->request_stop();
         m_cv.notify_all();   // wake thread so it can observe shouldRun = false
-        m_slots[idx]->thread->join();
-        m_slots[idx]->thread.reset();
+        m_slots[retiring]->thread->join();
+        m_slots[retiring]->thread.reset();
     }
 }
 

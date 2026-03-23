@@ -115,14 +115,14 @@ P-4.4  Dynamic Job System — WorkStealingQueue (mutex-per-thread, LIFO/FIFO), J
 - **Endianness-neutral.** Bitwise operators are endian-independent. No `SwapEndian` calls.
 - **Namespace:** `NetworkMiddleware` throughout.
 - **No implementation in headers** except templates and constexpr.
-- **TDD always.** Every new feature gets tests before or alongside implementation. 121 tests are the regression suite — never regress.
+- **TDD always.** Every new feature gets tests before or alongside implementation. 180 tests are the regression suite — never regress.
 - **Tick loop:** each cycle must complete in < 10ms (100Hz target). Flag any blocking calls inside the tick loop.
 - **sf::IpAddress(uint32_t)** expects big-endian (network byte order). ParseIpv4 returns big-endian.
 
 ## Testing Infrastructure
 
 ```bash
-# Run all 156 unit tests
+# Run all 180 unit tests
 powershell -ExecutionPolicy Bypass -File scripts/run_tests.ps1   # Windows
 bash scripts/run_tests.sh                                         # Linux/WSL2
 bash scripts/run_tests.sh --coverage                             # + lcov HTML report
