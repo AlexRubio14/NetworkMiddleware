@@ -1,7 +1,7 @@
-// NetworkMiddleware — P-4.3 Server
+// NetworkMiddleware — P-3.7 Server
 //
-// Production-ready dedicated server with a 100 Hz game loop.
-// Replaces the Phase 3 visual demo (kept in git history / IR-3.x).
+// Authoritative dedicated server with a 100 Hz game loop (Minimal Game Loop).
+// Integrates the first real game state: Input → GameWorld → Snapshot pipeline.
 //
 // Usage:
 //   ./NetServer              (listens on UDP :7777)
@@ -19,6 +19,7 @@
 #include <thread>
 
 #include "../Core/NetworkManager.h"
+#include "../Core/GameWorld.h"
 #include "../Shared/Log/Logger.h"
 #include "../Shared/NetworkAddress.h"
 #include "../Shared/TransportType.h"
@@ -83,39 +84,70 @@ int main() {
     // ── NetworkManager ────────────────────────────────────────────────────────
 
     NetworkManager manager(transport);
+    GameWorld gameWorld;
+    uint32_t tickID = 0;
 
-    manager.SetClientConnectedCallback([](uint16_t id, const EndPoint& ep) {
+    manager.SetClientConnectedCallback([&gameWorld](uint16_t id, const EndPoint& ep) {
         Logger::Log(LogLevel::Success, LogChannel::Core,
             std::format("CLIENT CONNECTED   NetworkID={}  ep={}", id, ep.ToString()));
+        gameWorld.AddHero(id);
     });
 
-    manager.SetClientDisconnectedCallback([](uint16_t id, const EndPoint& ep) {
+    manager.SetClientDisconnectedCallback([&gameWorld](uint16_t id, const EndPoint& ep) {
         Logger::Log(LogLevel::Warning, LogChannel::Core,
             std::format("CLIENT DISCONNECTED  NetworkID={}  ep={}", id, ep.ToString()));
+        gameWorld.RemoveHero(id);
     });
 
-    manager.SetDataCallback([](const PacketHeader& h, BitReader&, const EndPoint& ep) {
-        Logger::Log(LogLevel::Debug, LogChannel::Core,
-            std::format("INPUT seq={}  from={}", h.sequence, ep.ToString()));
-    });
+    // Input packets are now intercepted by NetworkManager and buffered as pendingInput.
+    // The game loop reads them via ForEachEstablished(). No data callback needed.
 
     // ── 100 Hz game loop ──────────────────────────────────────────────────────
-    // Budget: 10ms per tick. NetworkManager::Update() drains the full UDP buffer
-    // in a while loop (P-4.3 fix), so all accumulated packets are processed
-    // before sleep_until yields the thread.
+    // Budget: 10ms per tick.
     //
-    // Over-budget clamp: if Update() takes longer than kTickInterval (e.g. burst
-    // drain), nextTick falls behind and sleep_until returns immediately, causing
-    // a catch-up spin. We clamp nextTick to now so the loop stays bounded.
+    // Each tick:
+    //   1. manager.Update()         — drain UDP, process handshakes/ACKs, buffer inputs
+    //   2. ForEachEstablished (1st) — apply buffered inputs to GameWorld, clear inputs
+    //   3. gameWorld.Tick(dt)       — advance simulation (placeholder for Fase 5)
+    //   4. ForEachEstablished (2nd) — send delta snapshots to each client
+    //   5. ++tickID                 — monotone tick counter for lag compensation
+    //   6. sleep_until(nextTick)    — yield remaining budget
+    //
+    // Over-budget clamp: if the tick runs long, reset nextTick to avoid
+    // a catch-up spin that would starve the OS scheduler.
 
-    constexpr auto kTickInterval = std::chrono::microseconds(10'000);  // 100 Hz
+    constexpr auto  kTickInterval = std::chrono::microseconds(10'000);  // 100 Hz
+    constexpr float kFixedDt      = 0.01f;                              // seconds
+
     auto nextTick = std::chrono::steady_clock::now();
 
     Logger::Log(LogLevel::Info, LogChannel::Core,
         "Game loop starting at 100 Hz (10ms tick budget). Ctrl+C to stop.");
 
     while (g_running.load(std::memory_order_relaxed)) {
+        // 1. Network I/O
         manager.Update();
+
+        // 2. Apply buffered inputs
+        manager.ForEachEstablished(
+            [&](uint16_t id, const EndPoint& /*ep*/, const InputPayload* input) {
+                if (input)
+                    gameWorld.ApplyInput(id, *input, kFixedDt);
+            });
+
+        // 3. Advance simulation
+        gameWorld.Tick(kFixedDt);
+
+        // 4. Send snapshots
+        manager.ForEachEstablished(
+            [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
+                const auto* state = gameWorld.GetHeroState(id);
+                if (state)
+                    manager.SendSnapshot(ep, *state, tickID);
+            });
+
+        // 5. Advance tick counter
+        ++tickID;
 
         nextTick += kTickInterval;
 

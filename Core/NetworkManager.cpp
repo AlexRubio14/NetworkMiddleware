@@ -1,5 +1,7 @@
 #include "NetworkManager.h"
 #include "../Shared/Network/HandshakePackets.h"
+#include "../Shared/Network/InputPackets.h"
+#include "../Shared/Data/Network/HeroSerializer.h"
 #include "../Shared/Log/Logger.h"
 #include <format>
 
@@ -139,6 +141,13 @@ namespace NetworkMiddleware::Core {
                                 // Heartbeat: keepalive only — do not deliver to the game layer.
                                 if (type == Shared::PacketType::Heartbeat)
                                     break;
+
+                                // Input: buffer for the game loop (ForEachEstablished) rather
+                                // than firing the generic data callback.
+                                if (type == Shared::PacketType::Input) {
+                                    client.pendingInput = Shared::InputPayload::Read(reader);
+                                    break;
+                                }
 
                                 if (m_onDataReceived)
                                     m_onDataReceived(header, reader, sender);
@@ -502,6 +511,12 @@ namespace NetworkMiddleware::Core {
         std::erase_if(client.m_reliableSents, [&header](const auto& entry) {
             return header.IsAcked(entry.first);
         });
+
+        // P-3.7: Track the last server seq the client has confirmed (header.ack is the
+        // client's piggyback ACK for server-sent packets). Used by SendSnapshot() to
+        // select the correct delta baseline.
+        client.m_lastClientAckedServerSeq     = header.ack;
+        client.m_lastClientAckedServerSeqValid = true;
     }
 
     // -------------------------------------------------------------------------
@@ -750,6 +765,86 @@ namespace NetworkMiddleware::Core {
     bool NetworkManager::IsClientZombie(const Shared::EndPoint& ep) const {
         const auto it = m_establishedClients.find(ep);
         return it != m_establishedClients.end() && it->second.isZombie;
+    }
+
+    // -------------------------------------------------------------------------
+    // SendSnapshot — P-3.7 Game Loop
+    //
+    // Sends an authoritative snapshot to `to` using delta compression when a
+    // confirmed baseline exists, or a full Serialize() as fallback.
+    //
+    // Wire format: [tickID:32][HeroState bits from Serializer]
+    //
+    // The snapshot is recorded in the client's history for future delta baselines
+    // using the sequence number that was assigned to this packet.
+    // -------------------------------------------------------------------------
+    void NetworkManager::SendSnapshot(const Shared::EndPoint& to,
+                                      const Shared::Data::HeroState& state,
+                                      uint32_t tickID) {
+        auto it = m_establishedClients.find(to);
+        if (it == m_establishedClients.end())
+            return;
+
+        RemoteClient& client = it->second;
+
+        // Capture the seq that Send() will assign to this packet (before AdvanceLocal).
+        const uint16_t usedSeq = client.seqContext.localSequence;
+
+        // Build payload: tickID prefix + serialized hero state
+        Shared::BitWriter writer;
+        writer.WriteBits(tickID, 32);
+
+        const Shared::Data::HeroState* baseline = nullptr;
+        if (client.m_lastClientAckedServerSeqValid)
+            baseline = client.GetBaseline(client.m_lastClientAckedServerSeq);
+
+        if (baseline) {
+            Shared::Network::HeroSerializer::SerializeDelta(state, *baseline, writer);
+        } else {
+            // No confirmed baseline yet — send full state
+            Shared::Network::HeroSerializer::Serialize(state, writer);
+        }
+
+        const std::vector<uint8_t> payload = writer.GetCompressedData();
+
+        // Record this snapshot BEFORE Send() so the history entry is available
+        // even if the send fails partway through.
+        client.RecordSnapshot(usedSeq, state);
+
+        Send(to, payload, Shared::PacketType::Snapshot);
+    }
+
+    // -------------------------------------------------------------------------
+    // ForEachEstablished — P-3.7 Game Loop
+    //
+    // Iterates all non-zombie established clients and invokes `callback` with:
+    //   - networkID
+    //   - endpoint
+    //   - pointer to the buffered InputPayload (nullptr if no input this tick)
+    //
+    // After invoking the callback, pendingInput is cleared so the next call
+    // (e.g., the snapshot phase) receives nullptr instead of stale input.
+    // -------------------------------------------------------------------------
+    void NetworkManager::ForEachEstablished(
+        std::function<void(uint16_t, const Shared::EndPoint&, const Shared::InputPayload*)> callback)
+    {
+        // CONSTRAINT: the callback must NOT add or remove clients from m_establishedClients.
+        // This method iterates the map directly; any structural modification would
+        // invalidate the iterator and cause undefined behaviour.
+        // Current callers in main.cpp (ApplyInput phase and Snapshot phase) are safe:
+        // they only read GameWorld state and call SendSnapshot, neither of which
+        // modifies m_establishedClients.
+        for (auto& [endpoint, client] : m_establishedClients) {
+            if (client.isZombie)
+                continue;
+
+            const Shared::InputPayload* inputPtr =
+                client.pendingInput.has_value() ? &client.pendingInput.value() : nullptr;
+
+            callback(client.networkID, endpoint, inputPtr);
+
+            client.pendingInput.reset();
+        }
     }
 
 }

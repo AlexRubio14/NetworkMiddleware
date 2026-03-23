@@ -9,6 +9,8 @@ add_library(MiddlewareCore STATIC
         RemoteClient.cpp
         BotClient.h
         BotClient.cpp
+        GameWorld.h
+        GameWorld.cpp
 )
 
 target_link_libraries(MiddlewareCore PUBLIC MiddlewareShared)

@@ -2,7 +2,9 @@
 #include "../Shared/ITransport.h"
 #include "../Shared/Network/PacketHeader.h"
 #include "../Shared/Network/PacketTypes.h"
+#include "../Shared/Network/InputPackets.h"
 #include "../Shared/Serialization/BitReader.h"
+#include "../Shared/Data/HeroState.h"
 #include "RemoteClient.h"
 #include "NetworkProfiler.h"
 #include <memory>
@@ -121,5 +123,21 @@ namespace NetworkMiddleware::Core {
 
         // Returns true if the client at `ep` is in zombie state (timed out, awaiting reconnection).
         bool IsClientZombie(const Shared::EndPoint& ep) const;
+
+        // P-3.7 Game Loop
+
+        // Send an authoritative snapshot to `to` using delta compression.
+        // Selects the best available baseline from m_lastClientAckedServerSeq;
+        // falls back to a full Serialize() if no valid baseline exists.
+        // Records the sent snapshot for future delta baselines.
+        void SendSnapshot(const Shared::EndPoint& to,
+                          const Shared::Data::HeroState& state,
+                          uint32_t tickID);
+
+        // Iterate all non-zombie established clients.
+        // Callback receives: (networkID, endpoint, pendingInput or nullptr).
+        // After the callback returns, pendingInput is cleared for that client.
+        void ForEachEstablished(
+            std::function<void(uint16_t, const Shared::EndPoint&, const Shared::InputPayload*)> callback);
     };
 }

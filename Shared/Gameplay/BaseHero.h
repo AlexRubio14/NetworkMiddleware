@@ -58,5 +58,8 @@ namespace NetworkMiddleware::Shared::Gameplay {
         // Identity
         std::string GetHeroName() const override = 0;
         uint16_t GetHeroTypeID() const override { return m_state.heroTypeID; }
+
+        // Direct state access for GameWorld (read-only, P-3.7)
+        const Data::HeroState& GetState() const { return m_state; }
     };
 }
