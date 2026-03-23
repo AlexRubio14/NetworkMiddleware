@@ -29,13 +29,15 @@ namespace NetworkMiddleware::Core {
             uint64_t totalBytesSent     = 0;
             uint64_t totalBytesReceived = 0;
             uint32_t retransmissions    = 0;
+            uint32_t crcErrors          = 0;  // P-4.5: packets discarded due to CRC mismatch
             float    avgTickTimeUs      = 0.0f;
             float    deltaEfficiency    = 0.0f;  // 1 - (actual_avg_bytes / theoretical_full_sync_bytes)
             float    recentAvgTickMs    = 0.0f;  // P-4.4: EMA(α=0.1) — reactive to load spikes
         };
 
-        // Full sync: 149 bits ≈ 19 bytes per client (P-2/P-3.5 validated result).
-        static constexpr uint32_t kFullSyncBytesPerClient = 19;
+        // Full sync: 149 bits ≈ 19 bytes payload + 4 bytes CRC32 trailer = 23 bytes per client.
+        // P-4.5: updated from 19 → 23 so delta efficiency stays calibrated after CRC was added.
+        static constexpr uint32_t kFullSyncBytesPerClient = 23;
 
         // EMA smoothing factor — α=0.1 gives a half-life of ~7 ticks at 100 Hz.
         static constexpr float kEmaAlpha = 0.1f;
@@ -44,6 +46,7 @@ namespace NetworkMiddleware::Core {
         void RecordBytesSent(size_t bytes) noexcept;
         void RecordBytesReceived(size_t bytes) noexcept;
         void IncrementRetransmissions() noexcept;
+        void IncrementCRCErrors() noexcept;
 
         // RecordTick: updates cumulative average AND the EMA reactive average.
         // Must be called from the main thread (single-threaded write to m_recentAvgTickUs).
@@ -68,6 +71,7 @@ namespace NetworkMiddleware::Core {
         std::atomic<uint64_t> m_bytesSent{0};
         std::atomic<uint64_t> m_bytesReceived{0};
         std::atomic<uint32_t> m_retransmissions{0};
+        std::atomic<uint32_t> m_crcErrors{0};
         std::atomic<uint64_t> m_tickTimeAccumUs{0};
         std::atomic<uint32_t> m_tickCount{0};
 

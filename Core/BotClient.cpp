@@ -2,6 +2,7 @@
 #include "../Shared/Network/HandshakePackets.h"
 #include "../Shared/Serialization/BitWriter.h"
 #include "../Shared/Serialization/BitReader.h"
+#include "../Shared/Serialization/CRC32.h"
 #include <vector>
 
 namespace NetworkMiddleware::Core {
@@ -25,7 +26,19 @@ void BotClient::Update() {
     Shared::EndPoint sender;
 
     while (m_transport->Receive(buffer, sender)) {
-        if (buffer.empty()) continue;
+        // P-4.5: Verify CRC32 trailer and discard corrupt packets.
+        constexpr size_t kCRCSize = 4;
+        if (buffer.size() < kCRCSize) continue;
+        const size_t n = buffer.size() - kCRCSize;
+        const uint32_t rxCRC =
+              static_cast<uint32_t>(buffer[n + 0])
+            | static_cast<uint32_t>(buffer[n + 1]) <<  8
+            | static_cast<uint32_t>(buffer[n + 2]) << 16
+            | static_cast<uint32_t>(buffer[n + 3]) << 24;
+        if (rxCRC != Shared::ComputeCRC32(buffer.data(), n)) continue;
+        buffer.resize(n);  // strip CRC trailer
+
+        if (buffer.size() < Shared::PacketHeader::kByteCount) continue;
         Shared::BitReader reader(buffer, buffer.size() * 8);
         const auto header = Shared::PacketHeader::Read(reader);
         // Record the server's sequence so our outgoing ack/ack_bits stay accurate.
@@ -41,7 +54,7 @@ void BotClient::SendInput(float dirX, float dirY, uint8_t buttons) {
     BuildHeader(Shared::PacketType::Input).Write(w);
     Shared::InputPayload{dirX, dirY, buttons}.Write(w);
     m_seqCtx.AdvanceLocal();
-    m_transport->Send(w.GetCompressedData(), m_serverEndpoint);
+    SendBytes(w.GetCompressedData());
 }
 
 void BotClient::Disconnect() {
@@ -83,7 +96,7 @@ void BotClient::HandleChallenge(Shared::BitReader& reader) {
     BuildHeader(Shared::PacketType::ChallengeResponse).Write(w);
     Shared::ChallengeResponsePayload{m_pendingSalt}.Write(w);
     m_seqCtx.AdvanceLocal();
-    m_transport->Send(w.GetCompressedData(), m_serverEndpoint);
+    SendBytes(w.GetCompressedData());
 }
 
 void BotClient::HandleConnectionAccepted(Shared::BitReader& reader) {
@@ -113,7 +126,19 @@ void BotClient::SendHeaderOnly(Shared::PacketType type) {
     Shared::BitWriter w;
     BuildHeader(type).Write(w);
     m_seqCtx.AdvanceLocal();
-    m_transport->Send(w.GetCompressedData(), m_serverEndpoint);
+    SendBytes(w.GetCompressedData());
+}
+
+// P-4.5: Appends 4-byte CRC32 trailer (little-endian) before sending.
+// All outgoing bot packets must use this instead of m_transport->Send() directly.
+void BotClient::SendBytes(const std::vector<uint8_t>& wireBytes) {
+    std::vector<uint8_t> frame = wireBytes;
+    const uint32_t crc = Shared::ComputeCRC32(frame);
+    frame.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+    frame.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+    frame.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+    frame.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+    m_transport->Send(frame, m_serverEndpoint);
 }
 
 }  // namespace NetworkMiddleware::Core

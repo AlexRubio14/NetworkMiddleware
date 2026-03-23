@@ -21,6 +21,10 @@ namespace NetworkMiddleware::Core {
         m_retransmissions.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void NetworkProfiler::IncrementCRCErrors() noexcept {
+        m_crcErrors.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void NetworkProfiler::RecordTick(uint64_t microseconds) noexcept {
         m_tickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
         m_tickCount.fetch_add(1, std::memory_order_relaxed);
@@ -47,6 +51,7 @@ namespace NetworkMiddleware::Core {
         s.totalBytesSent     = m_bytesSent.load(std::memory_order_relaxed);
         s.totalBytesReceived = m_bytesReceived.load(std::memory_order_relaxed);
         s.retransmissions    = m_retransmissions.load(std::memory_order_relaxed);
+        s.crcErrors          = m_crcErrors.load(std::memory_order_relaxed);
 
         const uint32_t ticks = m_tickCount.load(std::memory_order_relaxed);
         const uint64_t accum = m_tickTimeAccumUs.load(std::memory_order_relaxed);
@@ -95,12 +100,13 @@ namespace NetworkMiddleware::Core {
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
             std::format(
-                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Out: {:.1f}kbps | In: {:.1f}kbps | Retries: {} | Delta Efficiency: {:.0f}%",
+                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Out: {:.1f}kbps | In: {:.1f}kbps | Retries: {} | CRC Err: {} | Delta Efficiency: {:.0f}%",
                 connectedClients,
                 s.avgTickTimeUs / 1000.0f,   // µs → ms
                 sentKbps,
                 recvKbps,
                 s.retransmissions,
+                s.crcErrors,
                 s.deltaEfficiency * 100.0f));
     }
 

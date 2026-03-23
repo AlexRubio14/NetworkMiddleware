@@ -1,12 +1,31 @@
 #include <gtest/gtest.h>
 #include "Core/NetworkManager.h"
 #include "Shared/Network/HandshakePackets.h"
+#include "Shared/Serialization/CRC32.h"
 #include "MockTransport.h"
 
 using namespace NetworkMiddleware;
 using namespace NetworkMiddleware::Core;
 using namespace NetworkMiddleware::Shared;
 using namespace NetworkMiddleware::Tests;
+
+// ─── CRC test helpers ─────────────────────────────────────────────────────────
+// P-4.5: All outgoing packets now carry a 4-byte CRC32 trailer.
+
+static std::vector<uint8_t> WithCRC(std::vector<uint8_t> data) {
+    const uint32_t crc = ComputeCRC32(data);
+    data.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+    return data;
+}
+
+static std::vector<uint8_t> StripCRC(const std::vector<uint8_t>& data) {
+    return data.size() >= 4
+        ? std::vector<uint8_t>(data.begin(), data.end() - 4)
+        : data;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -16,7 +35,7 @@ static std::vector<uint8_t> MakeHeaderOnlyPacket(PacketType type, uint16_t seq =
     h.sequence = seq;
     h.type     = static_cast<uint8_t>(type);
     h.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static std::vector<uint8_t> MakeChallengeResponsePacket(uint64_t salt, uint16_t seq = 0) {
@@ -26,7 +45,7 @@ static std::vector<uint8_t> MakeChallengeResponsePacket(uint64_t salt, uint16_t 
     h.type     = static_cast<uint8_t>(PacketType::ChallengeResponse);
     h.Write(w);
     ChallengeResponsePayload{salt}.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static std::vector<uint8_t> MakeReconnectionRequestPacket(uint16_t oldNetworkID, uint64_t token, uint16_t seq = 0) {
@@ -36,7 +55,7 @@ static std::vector<uint8_t> MakeReconnectionRequestPacket(uint16_t oldNetworkID,
     h.type     = static_cast<uint8_t>(PacketType::ReconnectionRequest);
     h.Write(w);
     ReconnectionRequestPayload{oldNetworkID, token}.Write(w);
-    return w.GetCompressedData();
+    return WithCRC(w.GetCompressedData());
 }
 
 static EndPoint MakeEndpoint(uint32_t addr = 0x0100007F, uint16_t port = 9000) {
@@ -53,8 +72,9 @@ static HandshakeResult CompleteHandshake(MockTransport& t, NetworkManager& nm, c
     t.InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep);
     nm.Update();
 
-    auto& challengePkt = t.sentPackets.back().first;
-    BitReader cr(challengePkt, challengePkt.size() * 8);
+    // Strip CRC trailer before parsing sent packets
+    const auto challengeStripped = StripCRC(t.sentPackets.back().first);
+    BitReader cr(challengeStripped, challengeStripped.size() * 8);
     PacketHeader::Read(cr);
     const auto challenge = ChallengePayload::Read(cr);
     t.sentPackets.clear();
@@ -62,8 +82,8 @@ static HandshakeResult CompleteHandshake(MockTransport& t, NetworkManager& nm, c
     t.InjectPacket(MakeChallengeResponsePacket(challenge.salt), ep);
     nm.Update();
 
-    auto& acceptPkt = t.sentPackets.back().first;
-    BitReader ar(acceptPkt, acceptPkt.size() * 8);
+    const auto acceptStripped = StripCRC(t.sentPackets.back().first);
+    BitReader ar(acceptStripped, acceptStripped.size() * 8);
     PacketHeader::Read(ar);
     const auto accepted = ConnectionAcceptedPayload::Read(ar);
     t.sentPackets.clear();
@@ -102,7 +122,8 @@ TEST(SessionRecovery, HeartbeatSent_WhenNoOutgoingFor1s) {
     nm.ProcessSessionKeepAlive(std::chrono::steady_clock::now() + std::chrono::seconds(2));
 
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto heartbeatStripped = StripCRC(t->sentPackets.front().first);
+    BitReader r(heartbeatStripped, heartbeatStripped.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::Heartbeat);
 }
@@ -234,7 +255,8 @@ TEST(SessionRecovery, Reconnect_InvalidToken_Rejected) {
     nm.Update();
 
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto deniedStripped1 = StripCRC(t->sentPackets.front().first);
+    BitReader r(deniedStripped1, deniedStripped1.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
 
@@ -256,7 +278,8 @@ TEST(SessionRecovery, Reconnect_NonZombieNetworkID_Rejected) {
     nm.Update();
 
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto deniedStripped2 = StripCRC(t->sentPackets.front().first);
+    BitReader r(deniedStripped2, deniedStripped2.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
 
@@ -290,7 +313,8 @@ TEST(SessionRecovery, Reconnect_SameEndpoint_Succeeds) {
 
     // Must have sent ConnectionAccepted (not ConnectionDenied)
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto acceptedStripped = StripCRC(t->sentPackets.front().first);
+    BitReader r(acceptedStripped, acceptedStripped.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionAccepted);
 }
@@ -316,7 +340,8 @@ TEST(SessionRecovery, Reconnect_OccupiedEndpoint_Rejected) {
     nm.Update();
 
     ASSERT_GE(t->sentPackets.size(), 1u);
-    BitReader r(t->sentPackets.front().first, t->sentPackets.front().first.size() * 8);
+    const auto deniedStripped3 = StripCRC(t->sentPackets.front().first);
+    BitReader r(deniedStripped3, deniedStripped3.size() * 8);
     const auto h = PacketHeader::Read(r);
     EXPECT_EQ(static_cast<PacketType>(h.type), PacketType::ConnectionDenied);
 

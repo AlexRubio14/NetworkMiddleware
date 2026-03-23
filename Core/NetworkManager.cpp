@@ -3,6 +3,7 @@
 #include "../Shared/Network/InputPackets.h"
 #include "../Shared/Data/Network/HeroSerializer.h"
 #include "../Shared/Log/Logger.h"
+#include "../Shared/Serialization/CRC32.h"
 #include <format>
 
 namespace NetworkMiddleware::Core {
@@ -44,7 +45,30 @@ namespace NetworkMiddleware::Core {
         while (m_transport->Receive(buffer, sender)) {
             m_profiler.RecordBytesReceived(buffer.size());
 
-            // 4. Validar tamaño mínimo del header
+            // 4. P-4.5: Verificar CRC32 trailer y descartar paquetes corruptos.
+            // Wire format: [Header: 13 bytes] [Payload: N bytes] [CRC32: 4 bytes]
+            constexpr size_t kCRCSize = 4;
+            if (buffer.size() < kCRCSize) {
+                m_profiler.IncrementCRCErrors();
+                continue;
+            }
+            {
+                const size_t n = buffer.size() - kCRCSize;
+                const uint32_t rxCRC =
+                      static_cast<uint32_t>(buffer[n + 0])
+                    | static_cast<uint32_t>(buffer[n + 1]) <<  8
+                    | static_cast<uint32_t>(buffer[n + 2]) << 16
+                    | static_cast<uint32_t>(buffer[n + 3]) << 24;
+                if (rxCRC != Shared::ComputeCRC32(buffer.data(), n)) {
+                    m_profiler.IncrementCRCErrors();
+                    Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                        std::format("CRC mismatch from {} — paquete descartado", sender.ToString()));
+                    continue;
+                }
+                buffer.resize(n);  // strip CRC trailer; BitReader se construye después
+            }
+
+            // 5. Validar tamaño mínimo del header
             constexpr size_t kHeaderBytes = Shared::PacketHeader::kByteCount;
             if (buffer.size() >= kHeaderBytes) {
                 // 5. Parsear el header de P-3.1
@@ -302,14 +326,28 @@ namespace NetworkMiddleware::Core {
     // Helpers de envío
     // -------------------------------------------------------------------------
 
+    // ── P-4.5 SendRaw ─────────────────────────────────────────────────────────
+    // Single chokepoint for all outgoing sends. Appends a 4-byte CRC32 trailer
+    // (little-endian) and delegates to the transport. Also owns RecordBytesSent
+    // so callers don't duplicate profiler accounting.
+    void NetworkManager::SendRaw(const std::vector<uint8_t>& wireBytes,
+                                  const Shared::EndPoint& to) {
+        std::vector<uint8_t> frame = wireBytes;
+        const uint32_t crc = Shared::ComputeCRC32(frame);
+        frame.push_back(static_cast<uint8_t>((crc >>  0) & 0xFF));
+        frame.push_back(static_cast<uint8_t>((crc >>  8) & 0xFF));
+        frame.push_back(static_cast<uint8_t>((crc >> 16) & 0xFF));
+        frame.push_back(static_cast<uint8_t>((crc >> 24) & 0xFF));
+        m_transport->Send(frame, to);
+        m_profiler.RecordBytesSent(frame.size());
+    }
+
     void NetworkManager::SendHeaderOnly(Shared::PacketType type, const Shared::EndPoint& to) {
         Shared::BitWriter writer;
         Shared::PacketHeader header;
         header.type = static_cast<uint8_t>(type);
         header.Write(writer);
-        const auto data = writer.GetCompressedData();
-        m_transport->Send(data, to);
-        m_profiler.RecordBytesSent(data.size());
+        SendRaw(writer.GetCompressedData(), to);
     }
 
     void NetworkManager::SendChallenge(const Shared::EndPoint& to, uint64_t salt) {
@@ -318,9 +356,7 @@ namespace NetworkMiddleware::Core {
         header.type = static_cast<uint8_t>(Shared::PacketType::ConnectionChallenge);
         header.Write(writer);
         Shared::ChallengePayload{salt}.Write(writer);
-        const auto data = writer.GetCompressedData();
-        m_transport->Send(data, to);
-        m_profiler.RecordBytesSent(data.size());
+        SendRaw(writer.GetCompressedData(), to);
     }
 
     void NetworkManager::SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token) {
@@ -329,9 +365,7 @@ namespace NetworkMiddleware::Core {
         header.type = static_cast<uint8_t>(Shared::PacketType::ConnectionAccepted);
         header.Write(writer);
         Shared::ConnectionAcceptedPayload{networkID, token}.Write(writer);
-        const auto data = writer.GetCompressedData();
-        m_transport->Send(data, to);
-        m_profiler.RecordBytesSent(data.size());
+        SendRaw(writer.GetCompressedData(), to);
     }
 
     void NetworkManager::SetClientDisconnectedCallback(OnClientDisconnectedCallback callback) {
@@ -404,8 +438,7 @@ namespace NetworkMiddleware::Core {
         if (channel == Shared::PacketType::Reliable)
             ++client.m_nextOutgoingReliableSeq;
 
-        m_transport->Send(compressed, to);
-        m_profiler.RecordBytesSent(compressed.size());
+        SendRaw(compressed, to);  // P-4.5: appends CRC32 trailer + records bytes sent
     }
 
     // -------------------------------------------------------------------------
@@ -452,8 +485,7 @@ namespace NetworkMiddleware::Core {
                     writer.WriteBits(byte, 8);
 
                 const auto retransmitData = writer.GetCompressedData();
-                m_transport->Send(retransmitData, endpoint);
-                m_profiler.RecordBytesSent(retransmitData.size());
+                SendRaw(retransmitData, endpoint);  // P-4.5: appends CRC32 trailer + records bytes sent
                 m_profiler.IncrementRetransmissions();
 
                 pending.lastSentTime = now;

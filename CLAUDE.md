@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — a C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux, validated via a Visual Debugger (Unreal Engine ActorComponent plugin). Not a game itself. Goal: outperform commercial middlewares (Photon Bolt, Mirror, UE Replication) in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–4.4 complete (2026-03-23). P-4.4 adds the Dynamic Work-Stealing Job System (Split-Phase snapshots, EMA reactive scaling). Fase 4 is now fully closed. Next: Fase 5 (Spatial Hashing + Kalman Prediction).
+**Current status:** Phases 1–4.5 complete (2026-03-23). P-4.5 adds CRC32 packet integrity (IEEE 802.3 trailer on every packet, verify+discard on receive) and the Scalability Gauntlet benchmark script (Sequential vs Parallel, 100 bots, 100ms/5% loss). Fase 4 is now fully closed. Next: Fase 5 (Spatial Hashing + Kalman Prediction).
 
 **Validated benchmark results (P-4.3, WSL2, Release):**
 - Tick budget: **1.1%** (0.11ms / 10ms) with 47 clients under degraded network (100ms / 2% loss)
 - Delta Efficiency: **99%** — the middleware sends 1% of what a full-sync system would
 - NOTE: These numbers will change now that Snapshot packets are sent each tick (expect Out ~20-40 kbps, Delta Efficiency ~60-80% under real game load)
-- 180/180 tests passing (Windows/MSVC)
+- 190/190 tests passing (Windows/MSVC)
 
 ## Build Commands
 
@@ -28,6 +28,10 @@ bash scripts/run_tests.sh
 # Stress benchmark (WSL2 only — requires sudo for tc netem)
 bash scripts/run_stress_test.sh               # full build + 3 scenarios
 bash scripts/run_stress_test.sh --skip-build  # reuse last build
+
+# P-4.5 Scalability Gauntlet (WSL2 only — Sequential vs Parallel, 100 bots)
+bash scripts/run_final_benchmark.sh               # full build + 2 scenarios
+bash scripts/run_final_benchmark.sh --skip-build  # reuse last build
 
 # Manual build (Windows, from repo root)
 cmake -S . -B cmake-build-debug
@@ -82,6 +86,7 @@ P-3.5  Delta Compression — ZigZag+VLE, SnapshotHistory (64 slots), SerializeDe
 P-3.6  Session Recovery — heartbeats (1s), zombie state (10s timeout), reconnection token (120s)
 P-3.7  Minimal Game Loop — GameWorld (authoritative), Input→GameWorld→Snapshot pipeline, 100Hz fixed-dt, anti-cheat clamping, tickID prefix for lag compensation
 P-4.4  Dynamic Job System — WorkStealingQueue (mutex-per-thread, LIFO/FIFO), JobSystem (round-robin dispatch, work-stealing workers, MaybeScale EMA α=0.1 with 5s hysteresis), Split-Phase snapshots (SerializeSnapshotFor + std::latch + CommitAndSendSnapshot)
+P-4.5  CRC32 Packet Integrity — IEEE 802.3 (0xEDB88320), constexpr lookup table, 4-byte trailer on every outgoing packet, verify+discard on receive; NetworkProfiler::crcErrors counter; --sequential server flag for Scalability Gauntlet benchmark
 ```
 
 ## Key Interfaces

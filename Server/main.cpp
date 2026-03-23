@@ -1,4 +1,4 @@
-// NetworkMiddleware — P-4.4 Server
+// NetworkMiddleware — P-4.5 Server
 //
 // Authoritative dedicated server with a 100 Hz game loop.
 // P-4.4 adds the Dynamic Work-Stealing Job System and the Split-Phase
@@ -9,11 +9,18 @@
 //   Phase B (main):     CommitAndSendSnapshot() records history and
 //                       transmits pre-built payloads sequentially.
 //
+// P-4.5 adds CRC32 packet integrity (trailer on every outgoing packet,
+// verify+discard on every incoming packet) and a --sequential flag for
+// the Scalability Gauntlet benchmark:
+//   --sequential: disable Split-Phase; dispatch snapshots on the main
+//                 thread (SendSnapshot), Job System stays idle.
+//
 // Dynamic scaling: MaybeScale() checks the EMA tick time every 1s and
 // grows/shrinks the pool between kMinThreads and hardware_concurrency-1.
 //
 // Usage:
-//   ./NetServer              (listens on UDP :7777)
+//   ./NetServer              (listens on UDP :7777, parallel mode)
+//   ./NetServer --sequential (sequential snapshot dispatch — benchmark)
 //   SERVER_PORT=9999 ./NetServer
 
 #include <atomic>
@@ -23,6 +30,7 @@
 #include <format>
 #include <latch>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -51,12 +59,21 @@ static void OnSignal(int) {
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 
-int main() {
+int main(int argc, char* argv[]) {
     std::signal(SIGINT,  OnSignal);
     std::signal(SIGTERM, OnSignal);
 
+    // ── Parse flags ───────────────────────────────────────────────────────────
+    bool parallelMode = true;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--sequential")
+            parallelMode = false;
+    }
+
     Logger::Start();
-    Logger::Banner("NetServer — P-4.4 Dynamic Job System");
+    Logger::Banner(parallelMode
+        ? "NetServer — P-4.5 Parallel Mode (Split-Phase Job System)"
+        : "NetServer — P-4.5 Sequential Mode (benchmark baseline)");
 
     // ── Transport ─────────────────────────────────────────────────────────────
 
@@ -119,6 +136,11 @@ int main() {
     Logger::Log(LogLevel::Info, LogChannel::Core,
         std::format("[JobSystem] Started with {} worker threads (max=hardware_concurrency-1)",
             jobSystem.GetThreadCount()));
+
+    Logger::Log(LogLevel::Info, LogChannel::Core,
+        parallelMode
+            ? "[Snapshot] Mode: PARALLEL (Split-Phase + Job System)"
+            : "[Snapshot] Mode: SEQUENTIAL (main-thread only — benchmark baseline)");
 
     // ── 100 Hz game loop ──────────────────────────────────────────────────────
     // Budget: 10ms per tick.
@@ -195,39 +217,47 @@ int main() {
             });
 
         if (!snapshots.empty()) {
-            // Phase A — parallel serialization
-            // sync.wait() is an unbounded barrier; we poll try_wait() against the
-            // tick deadline to detect over-budget serialization early.  We always
-            // drain fully before entering Phase B — accessing task.buffer before
-            // all jobs complete would be UB (workers still write into the vector).
-            std::latch sync(static_cast<std::ptrdiff_t>(snapshots.size()));
+            if (parallelMode) {
+                // Phase A — parallel serialization
+                // sync.wait() is an unbounded barrier; we poll try_wait() against the
+                // tick deadline to detect over-budget serialization early.  We always
+                // drain fully before entering Phase B — accessing task.buffer before
+                // all jobs complete would be UB (workers still write into the vector).
+                std::latch sync(static_cast<std::ptrdiff_t>(snapshots.size()));
 
-            for (auto& task : snapshots) {
-                jobSystem.Execute([&manager, &task, tickID, &sync]() {
-                    task.buffer = manager.SerializeSnapshotFor(task.ep, task.state, tickID);
-                    sync.count_down();
-                });
-            }
-
-            // Deadline-aware drain: detect over-budget without stranding tasks.
-            const auto phaseADeadline = nextTick + kTickInterval;
-            bool phaseAOverBudget = false;
-            while (!sync.try_wait()) {
-                if (std::chrono::steady_clock::now() >= phaseADeadline) {
-                    phaseAOverBudget = true;
-                    break;
+                for (auto& task : snapshots) {
+                    jobSystem.Execute([&manager, &task, tickID, &sync]() {
+                        task.buffer = manager.SerializeSnapshotFor(task.ep, task.state, tickID);
+                        sync.count_down();
+                    });
                 }
-                std::this_thread::yield();
-            }
-            if (phaseAOverBudget) {
-                Logger::Log(LogLevel::Warning, LogChannel::Core,
-                    "Snapshot Phase A exceeded tick budget — waiting for worker drain");
-                sync.wait();  // correctness: must drain before touching task.buffer
-            }
 
-            // Phase B — sequential commit + send
-            for (auto& task : snapshots) {
-                manager.CommitAndSendSnapshot(task.ep, task.state, task.buffer);
+                // Deadline-aware drain: detect over-budget without stranding tasks.
+                const auto phaseADeadline = nextTick + kTickInterval;
+                bool phaseAOverBudget = false;
+                while (!sync.try_wait()) {
+                    if (std::chrono::steady_clock::now() >= phaseADeadline) {
+                        phaseAOverBudget = true;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+                if (phaseAOverBudget) {
+                    Logger::Log(LogLevel::Warning, LogChannel::Core,
+                        "Snapshot Phase A exceeded tick budget — waiting for worker drain");
+                    sync.wait();  // correctness: must drain before touching task.buffer
+                }
+
+                // Phase B — sequential commit + send
+                for (auto& task : snapshots) {
+                    manager.CommitAndSendSnapshot(task.ep, task.state, task.buffer);
+                }
+            } else {
+                // Sequential baseline — main thread serializes and sends all snapshots.
+                // Job System stays idle (workers sleep on condvar, ~0 CPU overhead).
+                for (auto& task : snapshots) {
+                    manager.SendSnapshot(task.ep, task.state, tickID);
+                }
             }
         }
 
