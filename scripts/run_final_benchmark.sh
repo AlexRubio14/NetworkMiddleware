@@ -267,9 +267,7 @@ RESULT_FILE="$RESULTS_DIR/final_${RUN_TS}_${GIT_HASH}.md"
     echo ""
     echo '```'
     for i in "${!R_MODE[@]}"; do
-        local safe
         safe=$(echo "${R_MODE[$i]}" | tr ' :/' '___')
-        local raw
         raw=$(grep '\[PROFILER\]' "$LOG_DIR/server_${safe}.log" 2>/dev/null | tail -1 || echo "(no data)")
         echo "${R_MODE[$i]}: $raw"
     done
