@@ -2,6 +2,7 @@
 #include "../Shared/Data/HeroState.h"
 #include "../Shared/Network/InputPackets.h"
 #include "../Shared/Gameplay/ViegoEntity.h"
+#include <functional>
 #include <memory>
 #include <unordered_map>
 
@@ -43,6 +44,11 @@ namespace NetworkMiddleware::Core {
         // Returns the current HeroState for the given networkID, or nullptr
         // if the hero does not exist.
         const Shared::Data::HeroState* GetHeroState(uint32_t networkID) const;
+
+        // Iterate all heroes, invoking callback(networkID, heroState) for each.
+        // Used by the snapshot pipeline to send per-entity packets to each client.
+        void ForEachHero(
+            std::function<void(uint32_t, const Shared::Data::HeroState&)> callback) const;
 
     private:
         std::unordered_map<uint32_t, std::unique_ptr<Shared::Gameplay::ViegoEntity>> m_heroes;

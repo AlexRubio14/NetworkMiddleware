@@ -3,6 +3,7 @@
 # Create the static library
 add_library(MiddlewareShared STATIC
         NetworkAddress.h
+        GameplayConstants.h
         ITransport.h
         ITransport.cpp
         TransportType.h

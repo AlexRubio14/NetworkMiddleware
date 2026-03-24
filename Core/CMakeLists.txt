@@ -15,6 +15,8 @@ add_library(MiddlewareCore STATIC
         GameWorld.cpp
         JobSystem.h
         JobSystem.cpp
+        SpatialGrid.h
+        SpatialGrid.cpp
 )
 
 target_link_libraries(MiddlewareCore PUBLIC MiddlewareShared Threads::Threads)

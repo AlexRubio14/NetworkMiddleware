@@ -37,6 +37,7 @@
 #include "../Core/NetworkManager.h"
 #include "../Core/GameWorld.h"
 #include "../Core/JobSystem.h"
+#include "../Core/SpatialGrid.h"
 #include "../Shared/Log/Logger.h"
 #include "../Shared/NetworkAddress.h"
 #include "../Shared/TransportType.h"
@@ -110,8 +111,9 @@ int main(int argc, char* argv[]) {
     // ── NetworkManager + GameWorld ────────────────────────────────────────────
 
     NetworkManager manager(transport);
-    GameWorld gameWorld;
-    uint32_t tickID = 0;
+    GameWorld      gameWorld;
+    SpatialGrid    spatialGrid;
+    uint32_t       tickID = 0;
 
     manager.SetClientConnectedCallback([&gameWorld](uint16_t id, const EndPoint& ep) {
         Logger::Log(LogLevel::Success, LogChannel::Core,
@@ -197,23 +199,37 @@ int main(int argc, char* argv[]) {
         // 3. Advance simulation
         gameWorld.Tick(kFixedDt);
 
-        // 4. Send snapshots — Split-Phase (P-4.4)
+        // 4. Send snapshots — Split-Phase (P-4.4) + FOW filter (P-5.1)
         //
-        // Phase A: each job serializes one client's snapshot into a local buffer.
-        //   Workers access RemoteClient read-only (baseline + acked seq).
+        // Phase 0 (main thread): rebuild SpatialGrid — Clear then MarkVision for
+        //   every connected hero. Must complete before Phase A dispatch so workers
+        //   see a consistent, fully-marked grid (read-only from their perspective).
+        //
+        // Phase A: each job serializes one per-entity snapshot buffer.
+        //   Workers call IsCellVisible() — read-only, no mutex needed.
         //   Main thread is blocked at sync.wait() — no concurrent map mutations.
         //
         // Phase B: main thread records history and sends buffers over the socket.
         //   Sequential: SFML socket + RemoteClient writes are single-threaded.
 
-        std::vector<SnapshotTask> snapshots;
-        snapshots.reserve(manager.GetEstablishedCount());
-
+        // Phase 0 — rebuild FOW grid
+        spatialGrid.Clear();
         manager.ForEachEstablished(
             [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
                 const auto* state = gameWorld.GetHeroState(id);
                 if (state)
-                    snapshots.push_back({ep, *state, {}});
+                    spatialGrid.MarkVision(state->x, state->y, manager.GetClientTeamID(ep));
+            });
+
+        // Gather snapshot tasks: one per (client, visible entity) pair.
+        std::vector<SnapshotTask> snapshots;
+        manager.ForEachEstablished(
+            [&](uint16_t /*id*/, const EndPoint& ep, const InputPayload* /*input*/) {
+                const uint8_t team = manager.GetClientTeamID(ep);
+                gameWorld.ForEachHero([&](uint32_t /*entityID*/, const Data::HeroState& state) {
+                    if (spatialGrid.IsCellVisible(state.x, state.y, team))
+                        snapshots.push_back({ep, state, {}});
+                });
             });
 
         if (!snapshots.empty()) {
