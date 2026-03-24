@@ -24,6 +24,7 @@
 //       pred = kalman.Predict(id, z_k.x, z_k.y)        // predict only
 //       apply synthetic InputPayload{pred.dirX, pred.dirY, 0} to GameWorld
 #pragma once
+#include <cstdint>
 #include <unordered_map>
 
 namespace NetworkMiddleware::Brain {
