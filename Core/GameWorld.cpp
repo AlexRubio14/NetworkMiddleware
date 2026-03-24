@@ -48,4 +48,11 @@ namespace NetworkMiddleware::Core {
         return &it->second->GetState();
     }
 
+    void GameWorld::ForEachHero(
+        std::function<void(uint32_t, const Shared::Data::HeroState&)> callback) const
+    {
+        for (const auto& [id, hero] : m_heroes)
+            callback(id, hero->GetState());
+    }
+
 }  // namespace NetworkMiddleware::Core

@@ -309,6 +309,8 @@ namespace NetworkMiddleware::Core {
         newClient.reconnectionToken = token;
         newClient.lastIncomingTime  = now;
         newClient.lastOutgoingTime  = now;
+        // P-5.1: round-robin team assignment (0=Blue, 1=Red) based on arrival order.
+        newClient.teamID = static_cast<uint8_t>(m_establishedClients.size() % 2);
 
         m_establishedClients.emplace(sender, std::move(newClient));
         m_pendingClients.erase(it);
@@ -893,6 +895,14 @@ namespace NetworkMiddleware::Core {
         const auto payload = SerializeSnapshot(client, state, tickID);
         client.RecordSnapshot(usedSeq, state);
         Send(to, payload, Shared::PacketType::Snapshot);
+    }
+
+    // -------------------------------------------------------------------------
+    // GetClientTeamID — P-5.1 FOW interest management
+    // -------------------------------------------------------------------------
+    uint8_t NetworkManager::GetClientTeamID(const Shared::EndPoint& ep) const {
+        const auto it = m_establishedClients.find(ep);
+        return (it != m_establishedClients.end()) ? it->second.teamID : 0;
     }
 
     // -------------------------------------------------------------------------

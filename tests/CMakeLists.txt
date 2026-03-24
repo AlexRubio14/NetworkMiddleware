@@ -24,6 +24,7 @@ add_executable(MiddlewareTests
     Core/ProfilerTests.cpp
     Core/GameWorldTests.cpp
     Core/JobSystemTests.cpp
+    Core/SpatialGridTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE

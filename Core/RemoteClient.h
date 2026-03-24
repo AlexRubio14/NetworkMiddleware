@@ -137,6 +137,12 @@ namespace NetworkMiddleware::Core {
         // When the client transitioned to zombie state (for expiry calculation).
         std::chrono::steady_clock::time_point zombieTime;
 
+        // --- P-5.1 Team Assignment ---
+
+        // Assigned during HandleChallengeResponse based on arrival order (round-robin).
+        // 0 = Blue team, 1 = Red team. Used by SpatialGrid for FOW interest management.
+        uint8_t teamID = 0;
+
         // --- P-3.7 Game Loop ---
 
         // Buffered input from the client for the current tick.

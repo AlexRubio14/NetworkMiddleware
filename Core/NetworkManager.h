@@ -163,6 +163,10 @@ namespace NetworkMiddleware::Core {
                                    const Shared::Data::HeroState& state,
                                    const std::vector<uint8_t>& payload);
 
+        // Returns the team ID of the established client at ep (0 or 1).
+        // Returns 0 if the endpoint is not found (safe default for callers).
+        uint8_t GetClientTeamID(const Shared::EndPoint& ep) const;
+
         // Iterate all non-zombie established clients.
         // Callback receives: (networkID, endpoint, pendingInput or nullptr).
         // After the callback returns, pendingInput is cleared for that client.

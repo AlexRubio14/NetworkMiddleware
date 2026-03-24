@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — a C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux, validated via a Visual Debugger (Unreal Engine ActorComponent plugin). Not a game itself. Goal: outperform commercial middlewares (Photon Bolt, Mirror, UE Replication) in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–4.5 complete (2026-03-23). P-4.5 adds CRC32 packet integrity (IEEE 802.3 trailer on every packet, verify+discard on receive) and the Scalability Gauntlet benchmark script (Sequential vs Parallel, 100 bots, 100ms/5% loss). Fase 4 is now fully closed. Next: Fase 5 (Spatial Hashing + Kalman Prediction).
+**Current status:** Phases 1–5.1 complete (2026-03-24). P-5.1 adds SpatialGrid (20×20, 400 cells) with team-based bitset FOW, GameplayConstants.h centralising map/grid constants, round-robin team assignment during handshake, and multi-entity snapshot pipeline with per-tick visibility culling. 204/204 tests passing.
 
 **Validated benchmark results (P-4.3, WSL2, Release):**
 - Tick budget: **1.1%** (0.11ms / 10ms) with 47 clients under degraded network (100ms / 2% loss)
 - Delta Efficiency: **99%** — the middleware sends 1% of what a full-sync system would
 - NOTE: These numbers will change now that Snapshot packets are sent each tick (expect Out ~20-40 kbps, Delta Efficiency ~60-80% under real game load)
-- 190/190 tests passing (Windows/MSVC)
+- 204/204 tests passing (Windows/MSVC)
 
 ## Build Commands
 
@@ -87,6 +87,7 @@ P-3.6  Session Recovery — heartbeats (1s), zombie state (10s timeout), reconne
 P-3.7  Minimal Game Loop — GameWorld (authoritative), Input→GameWorld→Snapshot pipeline, 100Hz fixed-dt, anti-cheat clamping, tickID prefix for lag compensation
 P-4.4  Dynamic Job System — WorkStealingQueue (mutex-per-thread, LIFO/FIFO), JobSystem (round-robin dispatch, work-stealing workers, MaybeScale EMA α=0.1 with 5s hysteresis), Split-Phase snapshots (SerializeSnapshotFor + std::latch + CommitAndSendSnapshot)
 P-4.5  CRC32 Packet Integrity — IEEE 802.3 (0xEDB88320), constexpr lookup table, 4-byte trailer on every outgoing packet, verify+discard on receive; NetworkProfiler::crcErrors counter; --sequential server flag for Scalability Gauntlet benchmark
+P-5.1  Spatial Hashing & FOW — 20×20 SpatialGrid (50 u/cell), std::bitset<400>[2] team visibility, MarkVision per hero each tick, IsCellVisible culls snapshot tasks; GameplayConstants.h (MAP_MIN/MAX, VISION_CELL_RADIUS=4); round-robin teamID in RemoteClient; multi-entity snapshot pipeline (clients × visible entities)
 ```
 
 ## Key Interfaces
