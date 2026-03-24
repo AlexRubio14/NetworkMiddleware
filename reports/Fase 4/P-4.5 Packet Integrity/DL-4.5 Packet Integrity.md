@@ -101,6 +101,98 @@ The JobSystem is always constructed even in sequential mode. Workers sleep on th
 
 ---
 
+## Scalability Gauntlet — resultados medidos
+
+**Plataforma:** WSL2 6.6.87.2 · Release · commit `1d397d0`
+**Escenario:** 100 bots | 100ms latency | 5% packet loss | 60s por modo
+
+| Mode         | Connected | Avg Tick | Budget% | Out          | In          | CRC Err | Delta Eff. |
+|--------------|-----------|----------|---------|--------------|-------------|---------|------------|
+| Sequential   | 86/100    | 0.63ms   | 6.3%    | 1901.4 kbps  | 688.8 kbps  | 0       | 0%         |
+| Parallel     | 87/100    | 0.60ms   | 6.0%    | 1926.3 kbps  | 697.8 kbps  | 0       | 0%         |
+
+### Tick budget — comparativa visual
+
+```
+Sequential  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  6.3%  (0.63ms / 10ms)
+Parallel    ███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  6.0%  (0.60ms / 10ms)
+Budget max  ████████████████████████████████████████  10.0%
+```
+
+Mejora del job system: **−0.03ms (−4.8%)** a 87 clientes.
+
+### Análisis de resultados
+
+**Mejora modesta del job system (6.3% → 6.0%).**
+Esperado. Con 87 clientes y `HeroState` de 60 bytes, la serialización de un snapshot tarda ~1–2µs por cliente — un coste pequeño frente a los 10ms del tick budget. El dispatch al JobSystem y la sincronización con `std::latch` tienen overhead fijo (~5–10µs) que a este número de clientes amortiza poco. El beneficio del job system es superlineal en función del coste por cliente: en Fase 5, cuando cada cliente requiera una query de Spatial Hash + predicción de Kalman, el coste por cliente sube a ~10–50µs y la paralelización produce una ganancia proporcional al número de workers.
+
+**Delta Efficiency: 0% — correcto, no un bug.**
+Los bots envían movimiento cada tick. Cada héroe tiene cambios de posición en todos los ticks → `dirtyMask` siempre `!= 0` → siempre se serializa en modo full sync → el sistema de delta compression nunca encuentra un baseline limpio que reutilizar. En P-4.3 el mundo era casi estático (héroes sin input real), de ahí el 99%. Este 0% representa el peor caso de bandwidth para el Memoria: con jugadores reales moviéndose siempre, la compresión de estado nulo es del 0%. La compresión sigue activa para los campos de estado que no cambian (health, mana, level en reposo), pero la posición cambia siempre.
+
+**~1900 kbps out — coherente con el modelo teórico.**
+87 clientes × 23 bytes/tick (19 payload + 4 CRC) × 100 Hz × 8 bits = ~1.6 Mbps teórico. Los ~300 kbps de overhead son protocol frames: headers de 104 bits, reliable queue retransmissions, heartbeats cada 1s. El número está dentro del rango esperado.
+
+**86-87/100 bots conectados.**
+13-14 bots perdidos en handshake. El handshake tiene 4 pasos: `ConnectionRequest → Challenge → ChallengeResponse → Accepted`. Con 5% de pérdida por paso, la probabilidad de completar los 4 pasos es `0.95⁴ ≈ 81.5%`. En 100 bots: ~18-19 pérdidas teóricas; en la práctica, el retry de la reliability layer recupera algunos → 86-87 conectados. Esperado y documentado.
+
+**CRC Err: 0.**
+Confirmado. `tc netem delay+loss` no corrompe payloads por defecto — solo introduce retardo y descarte. El campo existe para detección en despliegues de producción con hardware que puede corromper paquetes UDP.
+
+---
+
+## Flujo de paquetes — diagramas de secuencia
+
+### Send path
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant BotClient
+    participant SendBytes as SendBytes<br/>(Helper)
+    participant CRC as CRC32
+    participant Transport
+
+    App->>BotClient: SendInput(...)
+    BotClient->>BotClient: Compress payload
+    BotClient->>SendBytes: SendBytes(compressed)
+    SendBytes->>CRC: ComputeCRC32(payload)
+    CRC-->>SendBytes: crc_value
+    SendBytes->>SendBytes: Append CRC32 trailer<br/>(little-endian)
+    SendBytes->>Transport: Send(frame + trailer)
+    Transport-->>SendBytes: ✓
+```
+
+### Receive path
+
+```mermaid
+sequenceDiagram
+    participant Transport
+    participant BotClient
+    participant CRC as CRC32
+    participant Parser as PacketHeader<br/>Parser
+
+    Transport->>BotClient: Receive(packet_data)
+    BotClient->>BotClient: Check size ≥ 4 bytes
+    alt Valid Size
+        BotClient->>CRC: ComputeCRC32(payload[:-4])
+        CRC-->>BotClient: computed_crc
+        BotClient->>BotClient: Extract trailer CRC<br/>(last 4 bytes)
+        alt CRC Match
+            BotClient->>BotClient: Strip CRC trailer
+            BotClient->>Parser: Parse PacketHeader
+            Parser-->>BotClient: ✓ Process packet
+        else CRC Mismatch
+            BotClient->>BotClient: Discard packet<br/>Profiler.IncrementCRCErrors()
+        end
+    else Invalid Size
+        BotClient->>BotClient: Discard packet<br/>Profiler.IncrementCRCErrors()
+    end
+```
+
+El mismo flujo aplica simétricamente a `NetworkManager` (servidor) con `SendRaw()` en lugar de `SendBytes()`.
+
+---
+
 ## What I would do differently
 
 The `WithCRC()` / `StripCRC()` helpers are duplicated across four test files. They're 10 lines each and do the same thing. A `tests/TestUtils.h` shared header would eliminate the duplication. I didn't add it because the plan said "prefer editing existing files to creating new ones" and the four files are already in the same CMake target. If a fifth test file ever needs handshake helpers, I'll extract it then.

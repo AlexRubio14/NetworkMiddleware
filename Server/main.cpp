@@ -1,4 +1,4 @@
-// NetworkMiddleware — P-4.5 Server
+// NetworkMiddleware — P-5.2 Server
 //
 // Authoritative dedicated server with a 100 Hz game loop.
 // P-4.4 adds the Dynamic Work-Stealing Job System and the Split-Phase
@@ -14,6 +14,11 @@
 // the Scalability Gauntlet benchmark:
 //   --sequential: disable Split-Phase; dispatch snapshots on the main
 //                 thread (SendSnapshot), Job System stays idle.
+//
+// P-5.2 adds Silent Server-Side Kalman Prediction (Brain::KalmanPredictor).
+// When a client's input packet is missing for a tick, the predictor
+// synthesizes a plausible direction from the constant-velocity model,
+// keeping GameWorld smooth without changing the wire format.
 //
 // Dynamic scaling: MaybeScale() checks the EMA tick time every 1s and
 // grows/shrinks the pool between kMinThreads and hardware_concurrency-1.
@@ -34,6 +39,7 @@
 #include <thread>
 #include <vector>
 
+#include "../Brain/KalmanPredictor.h"
 #include "../Core/NetworkManager.h"
 #include "../Core/GameWorld.h"
 #include "../Core/JobSystem.h"
@@ -73,8 +79,8 @@ int main(int argc, char* argv[]) {
 
     Logger::Start();
     Logger::Banner(parallelMode
-        ? "NetServer — P-4.5 Parallel Mode (Split-Phase Job System)"
-        : "NetServer — P-4.5 Sequential Mode (benchmark baseline)");
+        ? "NetServer — P-5.2 Parallel Mode (Split-Phase + Kalman Prediction)"
+        : "NetServer — P-5.2 Sequential Mode (benchmark baseline)");
 
     // ── Transport ─────────────────────────────────────────────────────────────
 
@@ -110,22 +116,27 @@ int main(int argc, char* argv[]) {
 
     // ── NetworkManager + GameWorld ────────────────────────────────────────────
 
-    NetworkManager manager(transport);
-    GameWorld      gameWorld;
-    SpatialGrid    spatialGrid;
-    uint32_t       tickID = 0;
+    NetworkManager              manager(transport);
+    GameWorld                   gameWorld;
+    SpatialGrid                 spatialGrid;
+    Brain::KalmanPredictor      kalmanPredictor;
+    uint32_t                    tickID = 0;
 
-    manager.SetClientConnectedCallback([&gameWorld](uint16_t id, const EndPoint& ep) {
-        Logger::Log(LogLevel::Success, LogChannel::Core,
-            std::format("CLIENT CONNECTED   NetworkID={}  ep={}", id, ep.ToString()));
-        gameWorld.AddHero(id);
-    });
+    manager.SetClientConnectedCallback(
+        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+            Logger::Log(LogLevel::Success, LogChannel::Core,
+                std::format("CLIENT CONNECTED   NetworkID={}  ep={}", id, ep.ToString()));
+            gameWorld.AddHero(id);
+            kalmanPredictor.AddEntity(id, 0.0f, 0.0f);
+        });
 
-    manager.SetClientDisconnectedCallback([&gameWorld](uint16_t id, const EndPoint& ep) {
-        Logger::Log(LogLevel::Warning, LogChannel::Core,
-            std::format("CLIENT DISCONNECTED  NetworkID={}  ep={}", id, ep.ToString()));
-        gameWorld.RemoveHero(id);
-    });
+    manager.SetClientDisconnectedCallback(
+        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+            Logger::Log(LogLevel::Warning, LogChannel::Core,
+                std::format("CLIENT DISCONNECTED  NetworkID={}  ep={}", id, ep.ToString()));
+            gameWorld.RemoveHero(id);
+            kalmanPredictor.RemoveEntity(id);
+        });
 
     // ── P-4.4 Job System ──────────────────────────────────────────────────────
     // Start with kMinThreads (2). MaybeScale() grows/shrinks based on EMA load.
@@ -189,11 +200,29 @@ int main(int argc, char* argv[]) {
         // 1. Network I/O
         manager.Update();
 
-        // 2. Apply buffered inputs
+        // 2. Apply buffered inputs — with P-5.2 Kalman prediction for missing ticks.
+        //
+        // z_k = GetHeroState(id)->[x,y]: authoritative position BEFORE this tick's
+        // input.  The Kalman filter observes this position on real-input ticks to
+        // refine its velocity estimate; on prediction ticks it extrapolates velocity
+        // to synthesize a plausible InputPayload (silent, no wire-format change).
         manager.ForEachEstablished(
             [&](uint16_t id, const EndPoint& /*ep*/, const InputPayload* input) {
-                if (input)
-                    gameWorld.ApplyInput(id, *input, kFixedDt);
+                const auto* state = gameWorld.GetHeroState(id);
+                if (!state) return;
+
+                InputPayload toApply;
+                if (input) {
+                    // Real input arrived: update Kalman filter, use real input.
+                    kalmanPredictor.Tick(id, state->x, state->y,
+                                         input->dirX, input->dirY);
+                    toApply = *input;
+                } else {
+                    // No input this tick: synthesize from Kalman prediction.
+                    const auto pred = kalmanPredictor.Predict(id, state->x, state->y);
+                    toApply = InputPayload{pred.dirX, pred.dirY, 0};
+                }
+                gameWorld.ApplyInput(id, toApply, kFixedDt);
             });
 
         // 3. Advance simulation

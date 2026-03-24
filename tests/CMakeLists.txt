@@ -25,12 +25,14 @@ add_executable(MiddlewareTests
     Core/GameWorldTests.cpp
     Core/JobSystemTests.cpp
     Core/SpatialGridTests.cpp
+    Brain/KalmanTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE
     GTest::gtest_main
     MiddlewareCore
     MiddlewareShared
+    Brain
 )
 
 target_include_directories(MiddlewareTests PRIVATE
