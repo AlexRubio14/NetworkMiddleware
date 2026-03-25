@@ -52,7 +52,11 @@ void BotClient::SendInput(float dirX, float dirY, uint8_t buttons) {
 
     Shared::BitWriter w;
     BuildHeader(Shared::PacketType::Input).Write(w);
-    Shared::InputPayload{dirX, dirY, buttons, m_localTick++}.Write(w);
+    // P-5.3: echo the last server tickID received in a Snapshot packet so the
+    // server can rewind to the correct historical position for lag compensation.
+    // uint16_t truncation is intentional — the server performs wrap-safe comparison.
+    Shared::InputPayload{dirX, dirY, buttons,
+        static_cast<uint16_t>(m_lastServerTick)}.Write(w);
     m_seqCtx.AdvanceLocal();
     SendBytes(w.GetCompressedData());
 }
@@ -79,8 +83,14 @@ void BotClient::ProcessPacket(const Shared::PacketHeader& header,
     case Shared::PacketType::ConnectionDenied:
         HandleConnectionDenied();
         break;
+    case Shared::PacketType::Snapshot:
+        // P-5.3: Snapshot payload starts with tickID:32 (see NetworkManager::SerializeSnapshot).
+        // Storing it here lets SendInput echo the server's authoritative clock, keeping
+        // clientTickID within kMaxRewindTicks of the server's current tickID.
+        m_lastServerTick = reader.ReadBits(32);
+        break;
     default:
-        break;  // Heartbeats, Snapshots etc. — ignored by bot for now
+        break;  // Heartbeats etc. — ignored by bot
     }
 }
 

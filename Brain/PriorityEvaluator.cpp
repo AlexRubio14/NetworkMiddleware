@@ -7,7 +7,6 @@ std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
     uint32_t                             observerID,
     float                                observerX,
     float                                observerY,
-    uint8_t                              observerTeam,
     const std::vector<EvaluationTarget>& allEntities) const
 {
     // Pass 1: determine inCombat flag for each entity.

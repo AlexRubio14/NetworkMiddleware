@@ -251,12 +251,22 @@ int main(int argc, char* argv[]) {
                         Shared::kAbility3 | Shared::kAbility4 | Shared::kAttack)) != 0;
 
                     if (abilityFired) {
-                        // Clamp fireTick to the valid rewind window.
-                        const uint32_t fireTick =
-                            (tickID >= kMaxRewindTicks &&
-                             input->clientTickID <= static_cast<uint16_t>(tickID) &&
-                             (tickID - input->clientTickID) <= kMaxRewindTicks)
-                            ? static_cast<uint32_t>(input->clientTickID)
+                        // clientTickID is the low 16 bits of the server tickID echoed back
+                        // by BotClient from the last received Snapshot packet.  We compute
+                        // the delta with wrap-safe uint16_t subtraction so the comparison
+                        // works correctly across the uint16_t wrap-around boundary (~10 min).
+                        // fireTick is within [tickID - kMaxRewindTicks, tickID] — note: exact
+                        // same-tick match is valid; GetStateAtTick will return the entry
+                        // recorded after Tick() but before snapshot dispatch this very tick.
+                        //
+                        // Wrap-around note: when clientTickID wraps (after ~65k inputs), delta
+                        // may momentarily exceed kMaxRewindTicks; the clamp safely falls back to
+                        // tickID - kMaxRewindTicks for that single input, degrading accuracy
+                        // only during the wrap transition (one input packet in ~10 minutes).
+                        const uint16_t tickID16 = static_cast<uint16_t>(tickID);
+                        const uint16_t delta    = tickID16 - input->clientTickID; // wrap-safe
+                        const uint32_t fireTick = (delta <= kMaxRewindTicks)
+                            ? (tickID - static_cast<uint32_t>(delta))
                             : (tickID >= kMaxRewindTicks ? tickID - kMaxRewindTicks : 0u);
 
                         // Attacker position at fire tick (for range check origin).
@@ -349,7 +359,7 @@ int main(int argc, char* argv[]) {
 
                 // Evaluate tiers for this observer.
                 const auto relevance = priorityEvaluator.Evaluate(
-                    obsID, obsSt->x, obsSt->y, obsTeam, allTargets);
+                    obsID, obsSt->x, obsSt->y, allTargets);
 
                 // Build a quick entityID → tier lookup.
                 std::unordered_map<uint32_t, uint8_t> tierMap;

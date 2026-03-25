@@ -77,9 +77,11 @@ namespace NetworkMiddleware::Core {
         uint64_t m_reconnectionToken = 0;
         uint64_t m_pendingSalt       = 0;
 
-        // P-5.3: monotone counter stamped on every outgoing InputPayload so the
-        // server can locate the correct rewind snapshot for lag compensation.
-        uint16_t m_localTick = 0;
+        // P-5.3: last server tickID received in a Snapshot packet.
+        // Echoed back in every InputPayload so the server can locate the correct
+        // rewind slot for lag compensation.  Starts at 0; safe because abilities
+        // are only pressed once the bot is Established and has received snapshots.
+        uint32_t m_lastServerTick = 0;
 
         // Tracks outgoing sequence numbers and incoming ACK state for piggybacking.
         Shared::SequenceContext m_seqCtx;

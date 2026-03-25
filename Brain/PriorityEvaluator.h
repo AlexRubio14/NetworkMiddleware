@@ -46,17 +46,16 @@ namespace NetworkMiddleware::Brain {
 
         // Evaluate replication tiers for all entities from the observer's perspective.
         //
-        // observerID   — networkID of the observing client (always Tier 0 for own hero).
-        // observerX/Y  — observer's current world position.
-        // observerTeam — observer's team ID (0 = Blue, 1 = Red).
-        // allEntities  — all entities in the world (FOW filtering is done upstream).
+        // observerID  — networkID of the observing client (always Tier 0 for own hero).
+        // observerX/Y — observer's current world position (used for distance calculation).
+        // allEntities — all entities in the world (FOW filtering is done upstream).
+        //               Each EvaluationTarget carries its own teamID for inCombat detection.
         //
         // Returns one EntityRelevance per entry in allEntities.
         std::vector<EntityRelevance> Evaluate(
-            uint32_t                          observerID,
-            float                             observerX,
-            float                             observerY,
-            uint8_t                           observerTeam,
+            uint32_t                             observerID,
+            float                                observerX,
+            float                                observerY,
             const std::vector<EvaluationTarget>& allEntities) const;
     };
 

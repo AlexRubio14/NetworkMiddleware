@@ -27,7 +27,7 @@ TEST(PriorityEvaluator, OwnHero_AlwaysTier0) {
     const std::vector<EvaluationTarget> targets = {
         MakeTarget(1, 0, 499.0f, 499.0f)  // far corner, same team
     };
-    const auto result = ev.Evaluate(1, 0.0f, 0.0f, 0, targets);
+    const auto result = ev.Evaluate(1, 0.0f, 0.0f, targets);
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0].tier, 0u) << "Own hero must always be Tier 0";
 }
@@ -39,7 +39,7 @@ TEST(PriorityEvaluator, NearbyEnemy_Tier0) {
         MakeTarget(1, 0, 0.0f, 0.0f),   // observer (own)
         MakeTarget(2, 1, 50.0f, 0.0f),  // enemy, close
     };
-    const auto result = ev.Evaluate(1, 0.0f, 0.0f, 0, targets);
+    const auto result = ev.Evaluate(1, 0.0f, 0.0f, targets);
     ASSERT_EQ(result.size(), 2u);
     // Find entity 2 in result.
     uint8_t tier2 = 99;
@@ -55,7 +55,7 @@ TEST(PriorityEvaluator, FarNonCombat_Tier2) {
         MakeTarget(1, 0,   0.0f, 0.0f),  // observer
         MakeTarget(2, 0, 400.0f, 0.0f),  // ally, far
     };
-    const auto result = ev.Evaluate(1, 0.0f, 0.0f, 0, targets);
+    const auto result = ev.Evaluate(1, 0.0f, 0.0f, targets);
     uint8_t tier2 = 99;
     for (const auto& r : result) if (r.entityID == 2) tier2 = r.tier;
     EXPECT_EQ(tier2, 2u) << "Far non-combat ally should be Tier 2";
@@ -71,7 +71,7 @@ TEST(PriorityEvaluator, CombatProximityBoostsTier) {
         MakeTarget(2, 0, 350.0f, 0.0f),  // ally far from observer, near enemy
         MakeTarget(3, 1, 400.0f, 0.0f),  // enemy near ally (50u apart)
     };
-    const auto result = ev.Evaluate(1, 0.0f, 0.0f, 0, targets);
+    const auto result = ev.Evaluate(1, 0.0f, 0.0f, targets);
     uint8_t tier2 = 99;
     for (const auto& r : result) if (r.entityID == 2) tier2 = r.tier;
     // Without combat: interest = 1/350 ≈ 0.00286 < kTier1Min (1/300) → Tier 2.
@@ -90,7 +90,7 @@ TEST(PriorityEvaluator, Tier1Range) {
         MakeTarget(1, 0,   0.0f, 0.0f),  // observer (own, team 0)
         MakeTarget(2, 1, 250.0f, 0.0f),  // enemy at 250u — outside kCombatRadius
     };
-    const auto result = ev.Evaluate(1, 0.0f, 0.0f, 0, targets);
+    const auto result = ev.Evaluate(1, 0.0f, 0.0f, targets);
     uint8_t tier2 = 99;
     for (const auto& r : result) if (r.entityID == 2) tier2 = r.tier;
     EXPECT_EQ(tier2, 1u) << "Enemy at 250u with no combat should be Tier 1";
