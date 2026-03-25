@@ -44,14 +44,26 @@ namespace NetworkMiddleware::Brain {
         static constexpr float kTier0Min      = kBaseWeight / 150.0f; // interest >= this → Tier 0
         static constexpr float kTier1Min      = kBaseWeight / 300.0f; // interest >= this → Tier 1
 
-        // Evaluate replication tiers for all entities from the observer's perspective.
+        // ComputeInCombat — O(N²) pre-pass, call ONCE per tick before Evaluate().
         //
-        // observerID  — networkID of the observing client (always Tier 0 for own hero).
-        // observerX/Y — observer's current world position (used for distance calculation).
-        // allEntities — all entities in the world (FOW filtering is done upstream).
-        //               Each EvaluationTarget carries its own teamID for inCombat detection.
-        //
-        // Returns one EntityRelevance per entry in allEntities.
+        // Returns a parallel vector of booleans: inCombat[i] is true if
+        // allEntities[i] has at least one opposing-team entity within kCombatRadius.
+        // Factored out so main.cpp can compute it once and pass it to all N Evaluate()
+        // calls instead of recomputing it per observer (was the O(N³) root cause).
+        std::vector<bool> ComputeInCombat(
+            const std::vector<EvaluationTarget>& allEntities) const;
+
+        // Evaluate — O(N) per observer when inCombat flags are pre-computed.
+        // Use this overload from the game loop (pre-compute inCombat once per tick).
+        std::vector<EntityRelevance> Evaluate(
+            uint32_t                             observerID,
+            float                                observerX,
+            float                                observerY,
+            const std::vector<EvaluationTarget>& allEntities,
+            const std::vector<bool>&             inCombat) const;
+
+        // Evaluate — O(N²) convenience overload (calls ComputeInCombat internally).
+        // Used by tests and any caller that doesn't need the pre-compute split.
         std::vector<EntityRelevance> Evaluate(
             uint32_t                             observerID,
             float                                observerX,

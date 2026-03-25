@@ -81,9 +81,9 @@ TEST(NetworkProfiler, DeltaEfficiency_NoData_IsZero) {
 TEST(NetworkProfiler, DeltaEfficiency_FullSyncGivesZeroEfficiency) {
     NetworkProfiler p;
     constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
-    // 1 entity-snapshot dispatched, sending kFull bytes → ratio = 1.0 → efficiency = 0.
+    // 1 entity-snapshot dispatched, sending kFull snapshot bytes → ratio = 1.0 → efficiency = 0.
     p.RecordEntitySnapshotsSent(1);
-    p.RecordBytesSent(kFull);
+    p.RecordSnapshotBytesSent(kFull);  // snapshot-only bytes used for efficiency
     p.RecordTick(1000);
     const auto s = p.GetSnapshot(1);
     EXPECT_NEAR(s.deltaEfficiency, 0.0f, 0.001f);
@@ -95,12 +95,29 @@ TEST(NetworkProfiler, DeltaEfficiency_HalfSentGivesFiftyPercent) {
     NetworkProfiler p;
     constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
     // 2 entity-snapshots dispatched, theoretical = 2×kFull bytes/tick.
-    // We send only kFull bytes → efficiency = 1 - (kFull / (2×kFull)) = 0.5
+    // We send only kFull snapshot bytes → efficiency = 1 - (kFull / (2×kFull)) = 0.5
     p.RecordEntitySnapshotsSent(2);
-    p.RecordBytesSent(kFull);
+    p.RecordSnapshotBytesSent(kFull);  // snapshot-only bytes used for efficiency
     p.RecordTick(1000);
     const auto s = p.GetSnapshot(2);
     EXPECT_NEAR(s.deltaEfficiency, 0.5f, 0.001f);
+}
+
+// Non-snapshot control traffic (heartbeats, ACKs) must NOT affect Delta Efficiency.
+// Efficiency is computed from snapshot bytes only — RecordBytesSent (all traffic)
+// does not influence the efficiency numerator.
+TEST(NetworkProfiler, DeltaEfficiency_NonSnapshotBytesNotCounted) {
+    NetworkProfiler p;
+    constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
+    // 1 entity-snapshot, sending kFull snapshot bytes → 0% efficiency baseline.
+    p.RecordEntitySnapshotsSent(1);
+    p.RecordSnapshotBytesSent(kFull);
+    // Add large non-snapshot overhead (e.g. heartbeats, handshake) via RecordBytesSent.
+    p.RecordBytesSent(kFull * 10);
+    p.RecordTick(1000);
+    const auto s = p.GetSnapshot(1);
+    // Efficiency must still be ~0% (snapshot bytes == theoretical), not negative.
+    EXPECT_NEAR(s.deltaEfficiency, 0.0f, 0.001f);
 }
 
 // ─── P-4.4: EMA reactive tick time ───────────────────────────────────────────

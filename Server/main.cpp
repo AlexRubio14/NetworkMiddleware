@@ -220,6 +220,11 @@ int main(int argc, char* argv[]) {
     std::unordered_map<uint32_t, uint8_t> entityTeams;
     std::vector<SnapshotTask> snapshots;
 
+    // Phase 0b pre-compute buffers — persistent to avoid heap allocation per tick.
+    std::vector<bool>                                        inCombatFlags;
+    std::unordered_map<uint32_t, size_t>                    entityIdx;
+    std::unordered_map<uint32_t, std::vector<uint8_t>>      tierByObs;
+
     auto nextTick = std::chrono::steady_clock::now();
 
     Logger::Log(LogLevel::Info, LogChannel::Core,
@@ -345,6 +350,35 @@ int main(int argc, char* argv[]) {
             if (it != entityTeams.end()) t.teamID = it->second;
         }
 
+        // Phase 0b (cont.) — pre-compute inCombat[] ONCE, then tiers per observer.
+        // O(N²) instead of the previous O(N³) (was: Evaluate() called N times, each O(N²)).
+        //
+        // inCombatFlags[i] = true if allTargets[i] is within kCombatRadius of any enemy.
+        // entityIdx maps entityID → index in allTargets for O(1) tier lookups in gather.
+        // tierByObs maps obsID → tier[i] for each entity i in allTargets.
+        inCombatFlags = priorityEvaluator.ComputeInCombat(allTargets);
+
+        entityIdx.clear();
+        entityIdx.reserve(allTargets.size());
+        for (size_t i = 0; i < allTargets.size(); ++i)
+            entityIdx[allTargets[i].entityID] = i;
+
+        tierByObs.clear();
+        tierByObs.reserve(manager.GetEstablishedCount());
+        manager.ForEachEstablished(
+            [&](uint16_t obsID, const EndPoint& /*ep*/, const InputPayload* /*input*/) {
+                const auto* obsSt = gameWorld.GetHeroState(obsID);
+                if (!obsSt) return;
+                const auto relevance = priorityEvaluator.Evaluate(
+                    obsID, obsSt->x, obsSt->y, allTargets, inCombatFlags);
+                std::vector<uint8_t> tiers(allTargets.size(), 2u);
+                for (const auto& r : relevance) {
+                    auto it = entityIdx.find(r.entityID);
+                    if (it != entityIdx.end()) tiers[it->second] = r.tier;
+                }
+                tierByObs[obsID] = std::move(tiers);
+            });
+
         // Tier helper: should we send this entity to this observer this tick?
         auto shouldSend = [&](uint8_t tier) -> bool {
             if (tier == 0) return true;
@@ -353,6 +387,7 @@ int main(int argc, char* argv[]) {
         };
 
         // Gather snapshot tasks: FOW-visible + tier-filtered.
+        // Tier lookup is O(1): tierByObs[obsID][entityIdx[eid]].
         // Reuse persistent snapshots vector — clear instead of reallocate.
         snapshots.clear();
         manager.ForEachEstablished(
@@ -361,21 +396,15 @@ int main(int argc, char* argv[]) {
                 const auto* obsSt     = gameWorld.GetHeroState(obsID);
                 if (!obsSt) return;
 
-                // Evaluate tiers for this observer.
-                const auto relevance = priorityEvaluator.Evaluate(
-                    obsID, obsSt->x, obsSt->y, allTargets);
-
-                // Linear scan on relevance (N ≤ kMaxClients) — avoids unordered_map
-                // heap allocation per observer per tick.
-                auto getTier = [&](uint32_t eid) -> uint8_t {
-                    for (const auto& r : relevance)
-                        if (r.entityID == eid) return r.tier;
-                    return 2u;
-                };
+                const auto obsIt = tierByObs.find(obsID);
+                if (obsIt == tierByObs.end()) return;
+                const std::vector<uint8_t>& tiers = obsIt->second;
 
                 gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
                     if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
-                    if (shouldSend(getTier(eid)))
+                    const auto idxIt = entityIdx.find(eid);
+                    const uint8_t tier = (idxIt != entityIdx.end()) ? tiers[idxIt->second] : 2u;
+                    if (shouldSend(tier))
                         snapshots.push_back({ep, st, {}});
                 });
             });

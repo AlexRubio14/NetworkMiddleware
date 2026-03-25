@@ -136,6 +136,11 @@ namespace NetworkMiddleware::Core {
         // Call once per tick with snapshots.size() after gathering the task list.
         void RecordEntitySnapshotsSent(size_t count) noexcept;
 
+        // P-5.x: Records bytes sent exclusively for snapshot packets (not all traffic).
+        // Called internally by CommitAndSendSnapshot / SendSnapshot so that the
+        // Delta Efficiency formula excludes control-plane overhead.
+        void RecordSnapshotBytesSent(size_t bytes) noexcept;
+
         // Records the full game-loop iteration time (Update + GameWorld + snapshot pipeline).
         // Call from main.cpp after Phase B and before sleep_until.
         void RecordFullTick(uint64_t microseconds) noexcept;

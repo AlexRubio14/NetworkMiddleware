@@ -29,6 +29,10 @@ namespace NetworkMiddleware::Core {
         m_entitySnapshotsSent.fetch_add(count, std::memory_order_relaxed);
     }
 
+    void NetworkProfiler::RecordSnapshotBytesSent(size_t bytes) noexcept {
+        m_snapshotBytesSent.fetch_add(bytes, std::memory_order_relaxed);
+    }
+
     void NetworkProfiler::RecordTick(uint64_t microseconds) noexcept {
         m_tickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
         m_tickCount.fetch_add(1, std::memory_order_relaxed);
@@ -75,21 +79,21 @@ namespace NetworkMiddleware::Core {
             ? static_cast<float>(fullAccum) / static_cast<float>(fullTicks)
             : 0.0f;
 
-        // Delta Efficiency = 1 - (avg_bytes_sent_per_tick / theoretical_full_sync_per_tick)
+        // Delta Efficiency = 1 - (snapshot_bytes_per_tick / theoretical_full_sync_per_tick)
         //
-        // P-5.x: theoretical uses entity-snapshot count, not client count.
-        // Since P-5.1, the server sends N entities per client per tick (FOW + LOD culled),
-        // so theoretical = (entitySnapshotsSent / ticks) × kFullSyncBytesPerClient.
-        // This correctly answers "how much less than full sync are we sending for the
-        // same set of entity-snapshots we actually dispatched?"
-        const uint64_t entitySnapshots = m_entitySnapshotsSent.load(std::memory_order_relaxed);
+        // P-5.x: uses m_snapshotBytesSent (snapshot packets only) instead of
+        // m_bytesSent (all traffic) so control overhead (heartbeats, handshake,
+        // ACKs) does not inflate the actual numerator and clamp efficiency to 0%.
+        // theoretical = (entitySnapshotsSent / ticks) × kFullSyncBytesPerClient.
+        const uint64_t entitySnapshots  = m_entitySnapshotsSent.load(std::memory_order_relaxed);
+        const uint64_t snapshotBytes    = m_snapshotBytesSent.load(std::memory_order_relaxed);
         if (ticks > 0 && entitySnapshots > 0) {
-            const float actualAvg      = static_cast<float>(s.totalBytesSent)
-                                         / static_cast<float>(ticks);
+            const float actualAvg       = static_cast<float>(snapshotBytes)
+                                          / static_cast<float>(ticks);
             const float entitiesPerTick = static_cast<float>(entitySnapshots)
                                           / static_cast<float>(ticks);
-            const float theoretical    = static_cast<float>(kFullSyncBytesPerClient)
-                                         * entitiesPerTick;
+            const float theoretical     = static_cast<float>(kFullSyncBytesPerClient)
+                                          * entitiesPerTick;
             s.deltaEfficiency = std::max(0.0f, 1.0f - (actualAvg / theoretical));
         }
 

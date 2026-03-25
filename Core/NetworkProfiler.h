@@ -60,6 +60,12 @@ namespace NetworkMiddleware::Core {
         // the old connectedClients×kFullSyncBytesPerClient denominator was wrong.
         void RecordEntitySnapshotsSent(size_t count) noexcept;
 
+        // P-5.x: Records bytes sent exclusively for entity-snapshot packets.
+        // Delta Efficiency uses this (not totalBytesSent) so that control traffic
+        // (heartbeats, handshake, ACKs) does not inflate the actual-bytes numerator
+        // and incorrectly clamp efficiency to 0%.
+        void RecordSnapshotBytesSent(size_t bytes) noexcept;
+
         // RecordTick: updates cumulative average AND the EMA reactive average.
         // Must be called from the main thread (single-threaded write to m_recentAvgTickUs).
         // Measures NetworkManager::Update() only (receive loop + handshakes + ACKs).
@@ -95,6 +101,7 @@ namespace NetworkMiddleware::Core {
         std::atomic<uint64_t> m_fullTickTimeAccumUs{0};
         std::atomic<uint32_t> m_fullTickCount{0};
         std::atomic<uint64_t> m_entitySnapshotsSent{0};
+        std::atomic<uint64_t> m_snapshotBytesSent{0};  // snapshot-only bytes for DeltaEfficiency
 
         // P-4.4: EMA reactive tick time. Written only by RecordTick() (main thread).
         // std::atomic<float> is standard since C++20; store/load with relaxed ordering.

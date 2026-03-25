@@ -117,6 +117,42 @@ TEST(PriorityEvaluator, ShouldSend_Tier1_EvenTicks) {
     }
 }
 
+// ─── ComputeInCombat ─────────────────────────────────────────────────────────
+
+// Two opposing teams close together → both flagged in-combat.
+TEST(PriorityEvaluator, ComputeInCombat_ProximalEnemiesDetected) {
+    PriorityEvaluator ev;
+    const std::vector<EvaluationTarget> targets = {
+        MakeTarget(1, 0,   0.0f, 0.0f),    // team 0
+        MakeTarget(2, 1, 100.0f, 0.0f),    // team 1, within kCombatRadius (200u)
+        MakeTarget(3, 0, 600.0f, 0.0f),    // team 0, far from all enemies
+    };
+    const auto flags = ev.ComputeInCombat(targets);
+    ASSERT_EQ(flags.size(), 3u);
+    EXPECT_TRUE(flags[0])  << "Entity 1 (team 0) should be in combat with entity 2 at 100u";
+    EXPECT_TRUE(flags[1])  << "Entity 2 (team 1) should be in combat with entity 1 at 100u";
+    EXPECT_FALSE(flags[2]) << "Entity 3 (team 0) at 600u has no nearby enemies";
+}
+
+// Evaluate() with pre-computed inCombat must match the built-in convenience overload.
+TEST(PriorityEvaluator, Evaluate_WithPrecomputedFlags_MatchesBuiltin) {
+    PriorityEvaluator ev;
+    const std::vector<EvaluationTarget> targets = {
+        MakeTarget(1, 0,   0.0f, 0.0f),
+        MakeTarget(2, 1, 350.0f, 0.0f),  // ally of enemy — combat-boosted scenario
+        MakeTarget(3, 1, 400.0f, 0.0f),
+    };
+    const auto inCombat  = ev.ComputeInCombat(targets);
+    const auto withFlags = ev.Evaluate(1, 0.0f, 0.0f, targets, inCombat);
+    const auto builtin   = ev.Evaluate(1, 0.0f, 0.0f, targets);
+    ASSERT_EQ(withFlags.size(), builtin.size());
+    for (size_t i = 0; i < withFlags.size(); ++i) {
+        EXPECT_EQ(withFlags[i].entityID, builtin[i].entityID);
+        EXPECT_EQ(withFlags[i].tier,     builtin[i].tier)
+            << "Tier mismatch for entity " << withFlags[i].entityID;
+    }
+}
+
 TEST(PriorityEvaluator, ShouldSend_Tier2_Every5th) {
     for (uint32_t t = 0; t < 15; ++t) {
         const uint8_t tier = 2;

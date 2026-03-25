@@ -800,6 +800,10 @@ namespace NetworkMiddleware::Core {
         m_profiler.RecordEntitySnapshotsSent(count);
     }
 
+    void NetworkManager::RecordSnapshotBytesSent(size_t bytes) noexcept {
+        m_profiler.RecordSnapshotBytesSent(bytes);
+    }
+
     void NetworkManager::RecordFullTick(uint64_t microseconds) noexcept {
         m_profiler.RecordFullTick(microseconds);
     }
@@ -883,6 +887,10 @@ namespace NetworkMiddleware::Core {
         const uint16_t usedSeq = client.seqContext.localSequence;
         client.RecordSnapshot(usedSeq, state);
         Send(to, payload, Shared::PacketType::Snapshot);
+        // Record snapshot-only bytes for accurate Delta Efficiency (excludes control traffic).
+        // Wire size = header (13) + payload + CRC trailer (4).
+        m_profiler.RecordSnapshotBytesSent(
+            Shared::PacketHeader::kByteCount + payload.size() + 4);
     }
 
     // -------------------------------------------------------------------------
@@ -903,6 +911,8 @@ namespace NetworkMiddleware::Core {
         const auto payload = SerializeSnapshot(client, state, tickID);
         client.RecordSnapshot(usedSeq, state);
         Send(to, payload, Shared::PacketType::Snapshot);
+        m_profiler.RecordSnapshotBytesSent(
+            Shared::PacketHeader::kByteCount + payload.size() + 4);
     }
 
     // -------------------------------------------------------------------------
