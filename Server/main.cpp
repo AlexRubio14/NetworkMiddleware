@@ -1,4 +1,4 @@
-// NetworkMiddleware — P-5.2 Server
+// NetworkMiddleware — P-5.4 Server
 //
 // Authoritative dedicated server with a 100 Hz game loop.
 // P-4.4 adds the Dynamic Work-Stealing Job System and the Split-Phase
@@ -20,6 +20,18 @@
 // synthesizes a plausible direction from the constant-velocity model,
 // keeping GameWorld smooth without changing the wire format.
 //
+// P-5.3 adds Server-Side Lag Compensation (Rewind).
+// InputPayload now carries clientTickID (16-bit). When an ability button is
+// pressed, the server rewinds target positions to clientTickID (clamped to
+// kMaxRewindTicks=20 ticks / 200ms) and performs a hit check against those
+// historical positions using HitValidator::CheckHit.
+//
+// P-5.4 adds Network LOD / AI Replication Prioritizer (Brain::PriorityEvaluator).
+// Phase 0b computes entity relevance tiers per observer before the gather loop.
+// Tier 0 entities are sent every tick (100Hz); Tier 1 every 2nd tick (50Hz);
+// Tier 2 every 5th tick (20Hz).  FOW filtering (P-5.1) is applied first so
+// the prioritizer only scores visible entities.
+//
 // Dynamic scaling: MaybeScale() checks the EMA tick time every 1s and
 // grows/shrinks the pool between kMinThreads and hardware_concurrency-1.
 //
@@ -40,11 +52,14 @@
 #include <vector>
 
 #include "../Brain/KalmanPredictor.h"
-#include "../Core/NetworkManager.h"
+#include "../Brain/PriorityEvaluator.h"
 #include "../Core/GameWorld.h"
+#include "../Core/HitValidator.h"
 #include "../Core/JobSystem.h"
+#include "../Core/NetworkManager.h"
 #include "../Core/SpatialGrid.h"
 #include "../Shared/Log/Logger.h"
+#include "../Shared/Network/InputPackets.h"
 #include "../Shared/NetworkAddress.h"
 #include "../Shared/TransportType.h"
 #include "../Transport/TransportFactory.h"
@@ -79,8 +94,8 @@ int main(int argc, char* argv[]) {
 
     Logger::Start();
     Logger::Banner(parallelMode
-        ? "NetServer — P-5.2 Parallel Mode (Split-Phase + Kalman Prediction)"
-        : "NetServer — P-5.2 Sequential Mode (benchmark baseline)");
+        ? "NetServer — P-5.4 Parallel Mode (Lag Comp + Network LOD)"
+        : "NetServer — P-5.4 Sequential Mode (benchmark baseline)");
 
     // ── Transport ─────────────────────────────────────────────────────────────
 
@@ -155,16 +170,26 @@ int main(int argc, char* argv[]) {
             ? "[Snapshot] Mode: PARALLEL (Split-Phase + Job System)"
             : "[Snapshot] Mode: SEQUENTIAL (main-thread only — benchmark baseline)");
 
+    // ── P-5.4 Priority Evaluator ──────────────────────────────────────────────
+    Brain::PriorityEvaluator priorityEvaluator;
+
+    // ── P-5.3 Lag Compensation constants ─────────────────────────────────────
+    static constexpr uint32_t kMaxRewindTicks  = 20;    // 200ms at 100Hz
+    static constexpr float    kAbilityRange    = 150.0f; // world units
+
     // ── 100 Hz game loop ──────────────────────────────────────────────────────
     // Budget: 10ms per tick.
     //
     // Each tick:
     //   1. manager.Update()           — drain UDP, handshakes, ACKs, buffer inputs
-    //   2. ForEachEstablished         — apply buffered inputs to GameWorld
+    //   2. ForEachEstablished         — apply inputs (Kalman pred on miss) + lag comp
     //   3. gameWorld.Tick(dt)         — advance simulation
-    //   4a. Collect snapshot tasks    — gather (ep, HeroState) pairs
-    //   4b. Phase A: dispatch to pool — parallel SerializeSnapshotFor()
-    //   4c. Phase B: commit + send    — sequential CommitAndSendSnapshot()
+    //   3b. gameWorld.RecordTick()    — snapshot positions for rewind (P-5.3)
+    //   4a. Phase 0: rebuild FOW grid — SpatialGrid::Clear + MarkVision
+    //   4b. Phase 0b: PriorityEvaluator — tier per (observer, entity) (P-5.4)
+    //   4c. Collect snapshot tasks    — gather (ep, HeroState) pairs filtered by FOW+tier
+    //   4d. Phase A: dispatch to pool — parallel SerializeSnapshotFor()
+    //   4e. Phase B: commit + send    — sequential CommitAndSendSnapshot()
     //   5. ++tickID                   — monotone counter for lag compensation
     //   6. jobSystem.MaybeScale()     — dynamic thread count adjustment
     //   7. sleep_until(nextTick)      — yield remaining budget
@@ -201,6 +226,8 @@ int main(int argc, char* argv[]) {
         manager.Update();
 
         // 2. Apply buffered inputs — with P-5.2 Kalman prediction for missing ticks.
+        //    P-5.3 Lag Compensation: if ability buttons are set, rewind target
+        //    positions to clientTickID and validate hit against historical positions.
         //
         // z_k = GetHeroState(id)->[x,y]: authoritative position BEFORE this tick's
         // input.  The Kalman filter observes this position on real-input ticks to
@@ -217,10 +244,52 @@ int main(int argc, char* argv[]) {
                     kalmanPredictor.Tick(id, state->x, state->y,
                                          input->dirX, input->dirY);
                     toApply = *input;
+
+                    // P-5.3: Lag compensation — validate ability hits against rewound positions.
+                    const bool abilityFired = (input->buttons & (
+                        Shared::kAbility1 | Shared::kAbility2 |
+                        Shared::kAbility3 | Shared::kAbility4 | Shared::kAttack)) != 0;
+
+                    if (abilityFired) {
+                        // clientTickID is the low 16 bits of the server tickID echoed back
+                        // by BotClient from the last received Snapshot packet.  We compute
+                        // the delta with wrap-safe uint16_t subtraction so the comparison
+                        // works correctly across the uint16_t wrap-around boundary (~10 min).
+                        // fireTick is within [tickID - kMaxRewindTicks, tickID] — note: exact
+                        // same-tick match is valid; GetStateAtTick will return the entry
+                        // recorded after Tick() but before snapshot dispatch this very tick.
+                        //
+                        // Wrap-around note: when clientTickID wraps (after ~65k inputs), delta
+                        // may momentarily exceed kMaxRewindTicks; the clamp safely falls back to
+                        // tickID - kMaxRewindTicks for that single input, degrading accuracy
+                        // only during the wrap transition (one input packet in ~10 minutes).
+                        const uint16_t tickID16 = static_cast<uint16_t>(tickID);
+                        const uint16_t delta    = tickID16 - input->clientTickID; // wrap-safe
+                        const uint32_t fireTick = (delta <= kMaxRewindTicks)
+                            ? (tickID - static_cast<uint32_t>(delta))
+                            : (tickID >= kMaxRewindTicks ? tickID - kMaxRewindTicks : 0u);
+
+                        // Attacker position at fire tick (for range check origin).
+                        const auto* atkHist = gameWorld.GetStateAtTick(id, fireTick);
+                        const float atkX = atkHist ? atkHist->x : state->x;
+                        const float atkY = atkHist ? atkHist->y : state->y;
+
+                        // Check all other entities at the fire tick.
+                        gameWorld.ForEachHero([&](uint32_t tgtID, const Data::HeroState& /*cur*/) {
+                            if (tgtID == id) return;
+                            const auto* tgtHist = gameWorld.GetStateAtTick(tgtID, fireTick);
+                            if (!tgtHist) return;
+                            if (CheckHit(atkX, atkY, tgtHist->x, tgtHist->y, kAbilityRange)) {
+                                Logger::Log(LogLevel::Info, LogChannel::Core,
+                                    std::format("[LagComp] HIT  attacker={} target={} fireTick={}",
+                                        id, tgtID, fireTick));
+                            }
+                        });
+                    }
                 } else {
                     // No input this tick: synthesize from Kalman prediction.
                     const auto pred = kalmanPredictor.Predict(id, state->x, state->y);
-                    toApply = InputPayload{pred.dirX, pred.dirY, 0};
+                    toApply = InputPayload{pred.dirX, pred.dirY, 0, 0};
                 }
                 gameWorld.ApplyInput(id, toApply, kFixedDt);
             });
@@ -228,36 +297,80 @@ int main(int argc, char* argv[]) {
         // 3. Advance simulation
         gameWorld.Tick(kFixedDt);
 
-        // 4. Send snapshots — Split-Phase (P-4.4) + FOW filter (P-5.1)
+        // 3b. P-5.3 — Record tick for rewind history (after Tick, before snapshots).
+        gameWorld.RecordTick(tickID);
+
+        // 4. Send snapshots — Split-Phase (P-4.4) + FOW (P-5.1) + Network LOD (P-5.4)
         //
-        // Phase 0 (main thread): rebuild SpatialGrid — Clear then MarkVision for
-        //   every connected hero. Must complete before Phase A dispatch so workers
-        //   see a consistent, fully-marked grid (read-only from their perspective).
-        //
-        // Phase A: each job serializes one per-entity snapshot buffer.
-        //   Workers call IsCellVisible() — read-only, no mutex needed.
-        //   Main thread is blocked at sync.wait() — no concurrent map mutations.
-        //
-        // Phase B: main thread records history and sends buffers over the socket.
-        //   Sequential: SFML socket + RemoteClient writes are single-threaded.
+        // Phase 0  (main thread): rebuild SpatialGrid — Clear + MarkVision.
+        // Phase 0b (main thread): PriorityEvaluator — compute tier per (obs, entity).
+        // Phase A  (workers):     Serialize each task concurrently.
+        // Phase B  (main thread): Commit history + send.
 
         // Phase 0 — rebuild FOW grid
         spatialGrid.Clear();
         manager.ForEachEstablished(
             [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
-                const auto* state = gameWorld.GetHeroState(id);
-                if (state)
-                    spatialGrid.MarkVision(state->x, state->y, manager.GetClientTeamID(ep));
+                const auto* st = gameWorld.GetHeroState(id);
+                if (st)
+                    spatialGrid.MarkVision(st->x, st->y, manager.GetClientTeamID(ep));
             });
 
-        // Gather snapshot tasks: one per (client, visible entity) pair.
+        // Phase 0b — compute replication tiers per observer (P-5.4).
+        // Build global entity list once; evaluate per observer.
+        std::vector<Brain::EvaluationTarget> allTargets;
+        gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
+            Brain::EvaluationTarget t;
+            t.entityID = eid;
+            t.teamID   = 0; // resolved below per-observer; set placeholder
+            t.x        = st.x;
+            t.y        = st.y;
+            allTargets.push_back(t);
+        });
+
+        // Map entityID → teamID for the evaluator (team is a per-client property).
+        // We build the target list with correct teamIDs derived from RemoteClient.
+        // Since ForEachEstablished iterates by EndPoint, we use GetClientTeamID.
+        // For entities not in the client map (should not happen), teamID stays 0.
+        std::unordered_map<uint32_t, uint8_t> entityTeams;
+        manager.ForEachEstablished(
+            [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
+                entityTeams[id] = manager.GetClientTeamID(ep);
+            });
+        for (auto& t : allTargets) {
+            auto it = entityTeams.find(t.entityID);
+            if (it != entityTeams.end()) t.teamID = it->second;
+        }
+
+        // Tier helper: should we send this entity to this observer this tick?
+        auto shouldSend = [&](uint8_t tier) -> bool {
+            if (tier == 0) return true;
+            if (tier == 1) return (tickID % 2) == 0;
+            return (tickID % 5) == 0;  // tier 2
+        };
+
+        // Gather snapshot tasks: FOW-visible + tier-filtered.
         std::vector<SnapshotTask> snapshots;
         manager.ForEachEstablished(
-            [&](uint16_t /*id*/, const EndPoint& ep, const InputPayload* /*input*/) {
-                const uint8_t team = manager.GetClientTeamID(ep);
-                gameWorld.ForEachHero([&](uint32_t /*entityID*/, const Data::HeroState& state) {
-                    if (spatialGrid.IsCellVisible(state.x, state.y, team))
-                        snapshots.push_back({ep, state, {}});
+            [&](uint16_t obsID, const EndPoint& ep, const InputPayload* /*input*/) {
+                const uint8_t obsTeam = manager.GetClientTeamID(ep);
+                const auto* obsSt     = gameWorld.GetHeroState(obsID);
+                if (!obsSt) return;
+
+                // Evaluate tiers for this observer.
+                const auto relevance = priorityEvaluator.Evaluate(
+                    obsID, obsSt->x, obsSt->y, allTargets);
+
+                // Build a quick entityID → tier lookup.
+                std::unordered_map<uint32_t, uint8_t> tierMap;
+                for (const auto& r : relevance)
+                    tierMap[r.entityID] = r.tier;
+
+                gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
+                    if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
+                    const uint8_t tier = tierMap.count(eid) ? tierMap.at(eid) : 2u;
+                    if (shouldSend(tier))
+                        snapshots.push_back({ep, st, {}});
                 });
             });
 

@@ -17,6 +17,8 @@ add_library(MiddlewareCore STATIC
         JobSystem.cpp
         SpatialGrid.h
         SpatialGrid.cpp
+        HitValidator.h
+        HitValidator.cpp
 )
 
 target_link_libraries(MiddlewareCore PUBLIC MiddlewareShared Threads::Threads)

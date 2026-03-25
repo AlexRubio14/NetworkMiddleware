@@ -55,8 +55,8 @@ jobs:
       - name: Generate coverage report
         if: matrix.coverage
         run: |
-          lcov --capture --directory build --output-file coverage.info --ignore-errors mismatch
-          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/googletest-src/*' --output-file coverage.info --ignore-errors mismatch
+          lcov --capture --directory build --output-file coverage.info --ignore-errors mismatch,negative
+          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/googletest-src/*' --output-file coverage.info --ignore-errors mismatch,negative
           lcov --list coverage.info
 
       - name: Upload coverage to Codecov
