@@ -796,6 +796,14 @@ namespace NetworkMiddleware::Core {
         return m_profiler.GetSnapshot(m_establishedClients.size());
     }
 
+    void NetworkManager::RecordEntitySnapshotsSent(size_t count) noexcept {
+        m_profiler.RecordEntitySnapshotsSent(count);
+    }
+
+    void NetworkManager::RecordFullTick(uint64_t microseconds) noexcept {
+        m_profiler.RecordFullTick(microseconds);
+    }
+
     bool NetworkManager::IsClientZombie(const Shared::EndPoint& ep) const {
         const auto it = m_establishedClients.find(ep);
         return it != m_establishedClients.end() && it->second.isZombie;

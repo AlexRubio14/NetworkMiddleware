@@ -98,7 +98,8 @@ trap cleanup EXIT INT TERM
 # ── Results (parallel arrays indexed 0-2) ────────────────────────────────────
 
 R_LABEL=(); R_CLIENTS=(); R_LOST=(); R_NETEM=()
-R_TICK=(); R_BUDGET=(); R_OUT=(); R_IN=(); R_RETRANS=(); R_EFF=()
+R_TICK=(); R_FULL_LOOP=(); R_BUDGET=(); R_FULL_BUDGET=()
+R_OUT=(); R_IN=(); R_RETRANS=(); R_EFF=()
 
 # ── run_scenario ──────────────────────────────────────────────────────────────
 # Args: <label> <bot_count> <delay_ms> <loss_pct> [<duration_s>]
@@ -177,17 +178,21 @@ run_scenario() {
 
     ok "Last snapshot: $last_line"
 
-    local clients avg_tick out_kbps in_kbps retries delta_eff
-    clients=$(   echo "$last_line" | grep -oP 'Clients: \K[0-9]+')
-    avg_tick=$(  echo "$last_line" | grep -oP 'Avg Tick: \K[0-9.]+')
-    out_kbps=$(  echo "$last_line" | grep -oP 'Out: \K[0-9.]+kbps')
-    in_kbps=$(   echo "$last_line" | grep -oP 'In: \K[0-9.]+kbps')
-    retries=$(   echo "$last_line" | grep -oP 'Retries: \K[0-9]+')
-    delta_eff=$( echo "$last_line" | grep -oP 'Delta Efficiency: \K[0-9]+%')
+    local clients avg_tick full_loop out_kbps in_kbps retries delta_eff
+    clients=$(   echo "$last_line" | grep -oP 'Clients: \K[0-9]+' || true)
+    avg_tick=$(  echo "$last_line" | grep -oP 'Avg Tick: \K[0-9.]+' || true)
+    full_loop=$( echo "$last_line" | grep -oP 'Full Loop: \K[0-9.]+' || true)
+    out_kbps=$(  echo "$last_line" | grep -oP 'Out: \K[0-9.]+kbps' || true)
+    in_kbps=$(   echo "$last_line" | grep -oP 'In: \K[0-9.]+kbps' || true)
+    retries=$(   echo "$last_line" | grep -oP 'Retries: \K[0-9]+' || true)
+    delta_eff=$( echo "$last_line" | grep -oP 'Delta Efficiency: \K[0-9]+%' || true)
 
-    local budget="?"
+    local budget="?" full_budget="?"
     if [[ -n "$avg_tick" ]]; then
         budget=$(awk "BEGIN { printf \"%.1f%%\", ($avg_tick / 10.0) * 100 }")
+    fi
+    if [[ -n "$full_loop" ]]; then
+        full_budget=$(awk "BEGIN { printf \"%.1f%%\", ($full_loop / 10.0) * 100 }")
     fi
 
     local lost="?"
@@ -200,7 +205,9 @@ run_scenario() {
     R_LOST+=("${lost:-?}")
     R_NETEM+=("${delay_ms}ms / ${loss_pct}%")
     R_TICK+=("${avg_tick:-?}ms")
+    R_FULL_LOOP+=("${full_loop:-?}ms")
     R_BUDGET+=("${budget}")
+    R_FULL_BUDGET+=("${full_budget}")
     R_OUT+=("${out_kbps:-?}")
     R_IN+=("${in_kbps:-?}")
     R_RETRANS+=("${retries:-?}")
@@ -244,20 +251,20 @@ echo -e "${BOLD}${CYAN}  Current:  P-5.4 ($(git -C "$REPO_ROOT" rev-parse --shor
 echo -e "${BOLD}${CYAN}  $(uname -r) | $(date '+%Y-%m-%d %H:%M')${NC}"
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-printf "${BOLD}%-22s  %-14s %-14s  %-12s %-12s  %-12s %-12s  %-14s %-14s${NC}\n" \
-    "Scenario" "P-4.3 Tick" "P-5.x Tick" "P-4.3 Out" "P-5.x Out" "P-4.3 Eff" "P-5.x Eff" "Out Δ" "Conn"
-echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+printf "${BOLD}%-22s  %-14s %-16s %-16s  %-12s %-12s  %-12s %-12s  %-14s %-14s${NC}\n" \
+    "Scenario" "P-4.3 Tick" "P-5.x Net Tick" "P-5.x Full Loop" "P-4.3 Out" "P-5.x Out" "P-4.3 Eff" "P-5.x Eff" "Out Δ" "Conn"
+echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
 for i in "${!R_LABEL[@]}"; do
     delta=$(kbps_delta "${BL_OUT[$i]}" "${R_OUT[$i]}")
-    printf "%-22s  %-14s %-14s  %-12s %-12s  %-12s %-12s  %-14s %-14s\n" \
+    printf "%-22s  %-14s %-16s %-16s  %-12s %-12s  %-12s %-12s  %-14s %-14s\n" \
         "${R_LABEL[$i]}" \
-        "${BL_TICK[$i]}" "${R_TICK[$i]}" \
+        "${BL_TICK[$i]}" "${R_TICK[$i]}" "${R_FULL_LOOP[$i]}" \
         "${BL_OUT[$i]}"  "${R_OUT[$i]}" \
         "${BL_EFF[$i]}"  "${R_EFF[$i]}" \
         "$delta" \
         "${R_CLIENTS[$i]}"
 done
-echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
 echo ""
 ok "Raw server logs: $LOG_DIR"
 
@@ -288,14 +295,14 @@ RESULT_FILE="$RESULTS_DIR/p5_regression_${RUN_TS}_${GIT_HASH}.md"
     echo ""
     echo "## Results"
     echo ""
-    printf "| %-20s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s | %-12s | %-12s |\n" \
-        "Scenario" "P-4.3 Tick" "P-5.x Tick" "P-4.3 Out" "P-5.x Out" "P-4.3 Eff" "P-5.x Eff" "Out Δ" "Connected"
-    echo "|----------------------|------------|------------|------------|------------|------------|------------|--------------|--------------|"
+    printf "| %-20s | %-10s | %-14s | %-14s | %-10s | %-10s | %-10s | %-10s | %-12s | %-12s |\n" \
+        "Scenario" "P-4.3 Tick" "P-5.x Net" "P-5.x Full" "P-4.3 Out" "P-5.x Out" "P-4.3 Eff" "P-5.x Eff" "Out Δ" "Connected"
+    echo "|----------------------|------------|----------------|----------------|------------|------------|------------|------------|--------------|--------------|"
     for i in "${!R_LABEL[@]}"; do
         delta=$(kbps_delta "${BL_OUT[$i]}" "${R_OUT[$i]}")
-        printf "| %-20s | %-10s | %-10s | %-10s | %-10s | %-10s | %-10s | %-12s | %-12s |\n" \
+        printf "| %-20s | %-10s | %-14s | %-14s | %-10s | %-10s | %-10s | %-10s | %-12s | %-12s |\n" \
             "${R_LABEL[$i]}" \
-            "${BL_TICK[$i]}" "${R_TICK[$i]}" \
+            "${BL_TICK[$i]}" "${R_TICK[$i]}" "${R_FULL_LOOP[$i]}" \
             "${BL_OUT[$i]}"  "${R_OUT[$i]}" \
             "${BL_EFF[$i]}"  "${R_EFF[$i]}" \
             "$delta" \
@@ -319,9 +326,7 @@ RESULT_FILE="$RESULTS_DIR/p5_regression_${RUN_TS}_${GIT_HASH}.md"
     echo ""
     echo '```'
     for i in "${!R_LABEL[@]}"; do
-        local safe
         safe=$(echo "${R_LABEL[$i]}" | tr ' :/' '___')
-        local raw
         raw=$(grep '\[PROFILER\]' "$LOG_DIR/server_${safe}.log" 2>/dev/null | tail -1 || echo "(no data)")
         echo "${R_LABEL[$i]}: $raw"
     done

@@ -25,6 +25,10 @@ namespace NetworkMiddleware::Core {
         m_crcErrors.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void NetworkProfiler::RecordEntitySnapshotsSent(size_t count) noexcept {
+        m_entitySnapshotsSent.fetch_add(count, std::memory_order_relaxed);
+    }
+
     void NetworkProfiler::RecordTick(uint64_t microseconds) noexcept {
         m_tickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
         m_tickCount.fetch_add(1, std::memory_order_relaxed);
@@ -34,6 +38,11 @@ namespace NetworkMiddleware::Core {
         const float old     = m_recentAvgTickUs.load(std::memory_order_relaxed);
         m_recentAvgTickUs.store(kEmaAlpha * current + (1.0f - kEmaAlpha) * old,
                                 std::memory_order_relaxed);
+    }
+
+    void NetworkProfiler::RecordFullTick(uint64_t microseconds) noexcept {
+        m_fullTickTimeAccumUs.fetch_add(microseconds, std::memory_order_relaxed);
+        m_fullTickCount.fetch_add(1, std::memory_order_relaxed);
     }
 
     float NetworkProfiler::GetRecentAvgTickUs() const noexcept {
@@ -60,13 +69,27 @@ namespace NetworkMiddleware::Core {
             : 0.0f;
         s.recentAvgTickMs = m_recentAvgTickUs.load(std::memory_order_relaxed) / 1000.0f;
 
-        // Delta Efficiency = 1 - (avg_bytes_sent_per_tick / theoretical_full_sync_bytes_per_tick)
-        // theoretical = kFullSyncBytesPerClient * connectedClients per tick
-        if (ticks > 0 && connectedClients > 0) {
-            const float actualAvg   = static_cast<float>(s.totalBytesSent)
-                                      / static_cast<float>(ticks);
-            const float theoretical = static_cast<float>(kFullSyncBytesPerClient)
-                                      * static_cast<float>(connectedClients);
+        const uint32_t fullTicks = m_fullTickCount.load(std::memory_order_relaxed);
+        const uint64_t fullAccum = m_fullTickTimeAccumUs.load(std::memory_order_relaxed);
+        s.avgFullTickTimeUs = (fullTicks > 0)
+            ? static_cast<float>(fullAccum) / static_cast<float>(fullTicks)
+            : 0.0f;
+
+        // Delta Efficiency = 1 - (avg_bytes_sent_per_tick / theoretical_full_sync_per_tick)
+        //
+        // P-5.x: theoretical uses entity-snapshot count, not client count.
+        // Since P-5.1, the server sends N entities per client per tick (FOW + LOD culled),
+        // so theoretical = (entitySnapshotsSent / ticks) × kFullSyncBytesPerClient.
+        // This correctly answers "how much less than full sync are we sending for the
+        // same set of entity-snapshots we actually dispatched?"
+        const uint64_t entitySnapshots = m_entitySnapshotsSent.load(std::memory_order_relaxed);
+        if (ticks > 0 && entitySnapshots > 0) {
+            const float actualAvg      = static_cast<float>(s.totalBytesSent)
+                                         / static_cast<float>(ticks);
+            const float entitiesPerTick = static_cast<float>(entitySnapshots)
+                                          / static_cast<float>(ticks);
+            const float theoretical    = static_cast<float>(kFullSyncBytesPerClient)
+                                         * entitiesPerTick;
             s.deltaEfficiency = std::max(0.0f, 1.0f - (actualAvg / theoretical));
         }
 
@@ -100,9 +123,10 @@ namespace NetworkMiddleware::Core {
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
             std::format(
-                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Out: {:.1f}kbps | In: {:.1f}kbps | Retries: {} | CRC Err: {} | Delta Efficiency: {:.0f}%",
+                "[PROFILER] Clients: {} | Avg Tick: {:.2f}ms | Full Loop: {:.2f}ms | Out: {:.1f}kbps | In: {:.1f}kbps | Retries: {} | CRC Err: {} | Delta Efficiency: {:.0f}%",
                 connectedClients,
-                s.avgTickTimeUs / 1000.0f,   // µs → ms
+                s.avgTickTimeUs / 1000.0f,     // µs → ms  (NetworkManager::Update only)
+                s.avgFullTickTimeUs / 1000.0f, // µs → ms  (complete game loop iteration)
                 sentKbps,
                 recvKbps,
                 s.retransmissions,

@@ -214,6 +214,12 @@ int main(int argc, char* argv[]) {
     float loopEmaMs   = 0.0f;
     constexpr float kLoopAlpha = 0.1f;
 
+    // Persistent per-tick scratch storage — allocated once, cleared each tick.
+    // Avoids heap churn in the hot path (gather loop runs 100× per second).
+    std::vector<Brain::EvaluationTarget> allTargets;
+    std::unordered_map<uint32_t, uint8_t> entityTeams;
+    std::vector<SnapshotTask> snapshots;
+
     auto nextTick = std::chrono::steady_clock::now();
 
     Logger::Log(LogLevel::Info, LogChannel::Core,
@@ -317,22 +323,19 @@ int main(int argc, char* argv[]) {
             });
 
         // Phase 0b — compute replication tiers per observer (P-5.4).
-        // Build global entity list once; evaluate per observer.
-        std::vector<Brain::EvaluationTarget> allTargets;
+        // Reuse persistent allTargets / entityTeams — clear instead of reallocate.
+        allTargets.clear();
         gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
             Brain::EvaluationTarget t;
             t.entityID = eid;
-            t.teamID   = 0; // resolved below per-observer; set placeholder
+            t.teamID   = 0;
             t.x        = st.x;
             t.y        = st.y;
             allTargets.push_back(t);
         });
 
-        // Map entityID → teamID for the evaluator (team is a per-client property).
-        // We build the target list with correct teamIDs derived from RemoteClient.
-        // Since ForEachEstablished iterates by EndPoint, we use GetClientTeamID.
-        // For entities not in the client map (should not happen), teamID stays 0.
-        std::unordered_map<uint32_t, uint8_t> entityTeams;
+        // Map entityID → teamID (derived from RemoteClient, resolved via EndPoint).
+        entityTeams.clear();
         manager.ForEachEstablished(
             [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
                 entityTeams[id] = manager.GetClientTeamID(ep);
@@ -350,7 +353,8 @@ int main(int argc, char* argv[]) {
         };
 
         // Gather snapshot tasks: FOW-visible + tier-filtered.
-        std::vector<SnapshotTask> snapshots;
+        // Reuse persistent snapshots vector — clear instead of reallocate.
+        snapshots.clear();
         manager.ForEachEstablished(
             [&](uint16_t obsID, const EndPoint& ep, const InputPayload* /*input*/) {
                 const uint8_t obsTeam = manager.GetClientTeamID(ep);
@@ -361,18 +365,22 @@ int main(int argc, char* argv[]) {
                 const auto relevance = priorityEvaluator.Evaluate(
                     obsID, obsSt->x, obsSt->y, allTargets);
 
-                // Build a quick entityID → tier lookup.
-                std::unordered_map<uint32_t, uint8_t> tierMap;
-                for (const auto& r : relevance)
-                    tierMap[r.entityID] = r.tier;
+                // Linear scan on relevance (N ≤ kMaxClients) — avoids unordered_map
+                // heap allocation per observer per tick.
+                auto getTier = [&](uint32_t eid) -> uint8_t {
+                    for (const auto& r : relevance)
+                        if (r.entityID == eid) return r.tier;
+                    return 2u;
+                };
 
                 gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
                     if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
-                    const uint8_t tier = tierMap.count(eid) ? tierMap.at(eid) : 2u;
-                    if (shouldSend(tier))
+                    if (shouldSend(getTier(eid)))
                         snapshots.push_back({ep, st, {}});
                 });
             });
+
+        manager.RecordEntitySnapshotsSent(snapshots.size());
 
         if (!snapshots.empty()) {
             if (parallelMode) {
@@ -423,9 +431,15 @@ int main(int argc, char* argv[]) {
         ++tickID;
 
         // 6. Full-loop EMA — covers all work steps 1-5 before sleep.
+        const auto tickWorkEnd = std::chrono::steady_clock::now();
         const float fullTickMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - tickStart).count();
+            tickWorkEnd - tickStart).count();
         loopEmaMs = kLoopAlpha * fullTickMs + (1.0f - kLoopAlpha) * loopEmaMs;
+
+        // Record full-loop time in profiler so it appears in MaybeReport output.
+        manager.RecordFullTick(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                tickWorkEnd - tickStart).count()));
 
         nextTick += kTickInterval;
 

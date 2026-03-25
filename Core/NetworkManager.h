@@ -132,6 +132,14 @@ namespace NetworkMiddleware::Core {
         // P-4.3: Access profiler snapshot (for embedding metrics in game loop).
         NetworkProfiler::Snapshot GetProfilerSnapshot() const;
 
+        // P-5.x: Records entity-snapshot count for accurate Delta Efficiency.
+        // Call once per tick with snapshots.size() after gathering the task list.
+        void RecordEntitySnapshotsSent(size_t count) noexcept;
+
+        // Records the full game-loop iteration time (Update + GameWorld + snapshot pipeline).
+        // Call from main.cpp after Phase B and before sleep_until.
+        void RecordFullTick(uint64_t microseconds) noexcept;
+
         // Returns true if the client at `ep` is in zombie state (timed out, awaiting reconnection).
         bool IsClientZombie(const Shared::EndPoint& ep) const;
 
