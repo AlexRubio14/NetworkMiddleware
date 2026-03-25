@@ -353,3 +353,81 @@ TEST(GameWorld, ForEachEstablished_InputClearedAfterCallback) {
 
     EXPECT_EQ(nonNullCount, 0);
 }
+
+// ─── P-5.3 RewindHistory tests ────────────────────────────────────────────────
+
+TEST(GameWorld, Rewind_RecordAndRetrieve) {
+    // RecordTick stores position; GetStateAtTick returns it at the exact tickID.
+    GameWorld world;
+    world.AddHero(1);
+
+    InputPayload right{1.0f, 0.0f, 0, 0};
+    world.ApplyInput(1, right, 0.01f);   // hero moves to (1, 0)
+    world.RecordTick(100);               // record at tick 100
+
+    const auto* entry = world.GetStateAtTick(1, 100);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_NEAR(entry->x, 1.0f, 0.1f);
+    EXPECT_NEAR(entry->y, 0.0f, 0.1f);
+    EXPECT_EQ(entry->tickID, 100u);
+    EXPECT_TRUE(entry->valid);
+}
+
+TEST(GameWorld, Rewind_WrongTickReturnsNull) {
+    // GetStateAtTick returns nullptr when the slot has been overwritten by a later tick.
+    GameWorld world;
+    world.AddHero(1);
+    world.RecordTick(0);
+
+    // Advance kRewindSlots ticks — slot 0 is now overwritten by tick kRewindSlots.
+    for (uint32_t t = 1; t <= GameWorld::kRewindSlots; ++t)
+        world.RecordTick(t);
+
+    // Tick 0 occupies slot 0, but it has been overwritten by tick kRewindSlots.
+    EXPECT_EQ(world.GetStateAtTick(1, 0), nullptr);
+    // Tick kRewindSlots is valid.
+    EXPECT_NE(world.GetStateAtTick(1, GameWorld::kRewindSlots), nullptr);
+}
+
+TEST(GameWorld, Rewind_UnknownEntityReturnsNull) {
+    GameWorld world;
+    world.AddHero(1);
+    world.RecordTick(10);
+
+    // Entity 99 was never added.
+    EXPECT_EQ(world.GetStateAtTick(99, 10), nullptr);
+}
+
+TEST(GameWorld, Rewind_RemoveHeroClearsHistory) {
+    // After RemoveHero, GetStateAtTick must return nullptr.
+    GameWorld world;
+    world.AddHero(5);
+    world.RecordTick(42);
+    ASSERT_NE(world.GetStateAtTick(5, 42), nullptr);
+
+    world.RemoveHero(5);
+    EXPECT_EQ(world.GetStateAtTick(5, 42), nullptr);
+}
+
+TEST(GameWorld, Rewind_MultipleEntitiesTrackedIndependently) {
+    // Two heroes move in opposite directions; their rewind entries are independent.
+    GameWorld world;
+    world.AddHero(1);
+    world.AddHero(2);
+
+    world.ApplyInput(1, InputPayload{ 1.0f, 0.0f, 0, 0}, 0.01f);  // hero1 → (+1, 0)
+    world.ApplyInput(2, InputPayload{-1.0f, 0.0f, 0, 0}, 0.01f);  // hero2 → (-1, 0)
+    world.RecordTick(200);
+
+    const auto* e1 = world.GetStateAtTick(1, 200);
+    const auto* e2 = world.GetStateAtTick(2, 200);
+    ASSERT_NE(e1, nullptr);
+    ASSERT_NE(e2, nullptr);
+    EXPECT_GT(e1->x, 0.0f);
+    EXPECT_LT(e2->x, 0.0f);
+}
+
+TEST(GameWorld, Rewind_InputPayload_kBitCount) {
+    // Verify the wire format change: InputPayload is now 40 bits.
+    EXPECT_EQ(InputPayload::kBitCount, 40u);
+}

@@ -9,10 +9,12 @@ namespace NetworkMiddleware::Core {
             return;
         m_heroes.emplace(networkID,
             std::make_unique<Shared::Gameplay::ViegoEntity>(networkID));
+        m_rewindHistory.emplace(networkID, std::array<RewindEntry, kRewindSlots>{});
     }
 
     void GameWorld::RemoveHero(uint32_t networkID) {
         m_heroes.erase(networkID);
+        m_rewindHistory.erase(networkID);
     }
 
     void GameWorld::ApplyInput(uint32_t networkID,
@@ -53,6 +55,30 @@ namespace NetworkMiddleware::Core {
     {
         for (const auto& [id, hero] : m_heroes)
             callback(id, hero->GetState());
+    }
+
+    // P-5.3 ──────────────────────────────────────────────────────────────────
+
+    void GameWorld::RecordTick(uint32_t tickID) {
+        const size_t slot = tickID % kRewindSlots;
+        for (const auto& [id, hero] : m_heroes) {
+            auto it = m_rewindHistory.find(id);
+            if (it == m_rewindHistory.end()) continue;
+            auto& entry  = it->second[slot];
+            entry.x      = hero->GetX();
+            entry.y      = hero->GetY();
+            entry.tickID = tickID;
+            entry.valid  = true;
+        }
+    }
+
+    const RewindEntry* GameWorld::GetStateAtTick(uint32_t entityID, uint32_t tickID) const {
+        const auto it = m_rewindHistory.find(entityID);
+        if (it == m_rewindHistory.end()) return nullptr;
+
+        const auto& entry = it->second[tickID % kRewindSlots];
+        if (!entry.valid || entry.tickID != tickID) return nullptr;
+        return &entry;
     }
 
 }  // namespace NetworkMiddleware::Core

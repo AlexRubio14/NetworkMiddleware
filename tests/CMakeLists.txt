@@ -26,6 +26,7 @@ add_executable(MiddlewareTests
     Core/JobSystemTests.cpp
     Core/SpatialGridTests.cpp
     Brain/KalmanTests.cpp
+    Brain/PriorityEvaluatorTests.cpp
 )
 
 target_link_libraries(MiddlewareTests PRIVATE

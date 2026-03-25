@@ -52,7 +52,7 @@ void BotClient::SendInput(float dirX, float dirY, uint8_t buttons) {
 
     Shared::BitWriter w;
     BuildHeader(Shared::PacketType::Input).Write(w);
-    Shared::InputPayload{dirX, dirY, buttons}.Write(w);
+    Shared::InputPayload{dirX, dirY, buttons, m_localTick++}.Write(w);
     m_seqCtx.AdvanceLocal();
     SendBytes(w.GetCompressedData());
 }

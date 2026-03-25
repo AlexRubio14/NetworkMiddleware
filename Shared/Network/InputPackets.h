@@ -6,7 +6,8 @@
 
 // Wire format for client input commands (P-4.1/4.2).
 // Sent at ~60 Hz by the HeadlessBot (and in future by the Unreal client).
-// Total: 24 bits — small enough to fit in a single UDP packet with the header.
+// P-5.3: clientTickID added for server-side lag compensation (rewind).
+// Total: 40 bits — dirX:8 + dirY:8 + buttons:8 + clientTickID:16
 
 namespace NetworkMiddleware::Shared {
 
@@ -21,11 +22,12 @@ namespace NetworkMiddleware::Shared {
     };
 
     struct InputPayload {
-        float   dirX    = 0.0f;  // Movement direction X, normalized [-1.0, 1.0]
-        float   dirY    = 0.0f;  // Movement direction Y, normalized [-1.0, 1.0]
-        uint8_t buttons = 0;     // Action bitmask (see InputButtons above)
+        float    dirX         = 0.0f;  // Movement direction X, normalized [-1.0, 1.0]
+        float    dirY         = 0.0f;  // Movement direction Y, normalized [-1.0, 1.0]
+        uint8_t  buttons      = 0;     // Action bitmask (see InputButtons above)
+        uint16_t clientTickID = 0;     // P-5.3: client-local tick counter for lag compensation
 
-        static constexpr uint32_t kBitCount = 24;  // 8 + 8 + 8
+        static constexpr uint32_t kBitCount = 40;  // 8 + 8 + 8 + 16
 
         void Write(BitWriter& writer) const {
             using Opt = Network::NetworkOptimizer;
@@ -34,14 +36,16 @@ namespace NetworkMiddleware::Shared {
             writer.WriteBits(qX, 8);
             writer.WriteBits(qY, 8);
             writer.WriteBits(buttons, 8);
+            writer.WriteBits(clientTickID, 16);
         }
 
         static InputPayload Read(BitReader& reader) {
             using Opt = Network::NetworkOptimizer;
             InputPayload p;
-            p.dirX    = Opt::DequantizeFloat(reader.ReadBits(8), -1.0f, 1.0f, 8);
-            p.dirY    = Opt::DequantizeFloat(reader.ReadBits(8), -1.0f, 1.0f, 8);
-            p.buttons = static_cast<uint8_t>(reader.ReadBits(8));
+            p.dirX         = Opt::DequantizeFloat(reader.ReadBits(8), -1.0f, 1.0f, 8);
+            p.dirY         = Opt::DequantizeFloat(reader.ReadBits(8), -1.0f, 1.0f, 8);
+            p.buttons      = static_cast<uint8_t>(reader.ReadBits(8));
+            p.clientTickID = static_cast<uint16_t>(reader.ReadBits(16));
             return p;
         }
     };

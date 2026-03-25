@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — a C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux, validated via a Visual Debugger (Unreal Engine ActorComponent plugin). Not a game itself. Goal: outperform commercial middlewares (Photon Bolt, Mirror, UE Replication) in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–5.2 complete (2026-03-24). P-5.2 adds Brain::KalmanPredictor — silent server-side prediction using a 4-state constant-velocity Kalman filter [x,y,vx,vy]. Synthesizes InputPayload when client packets are lost, keeping GameWorld smooth with no wire-format changes. Orchestrated from main.cpp (Brain standalone, no Core dep). Q=diag(0.001,0.001,5,5), R=0.015×I₂. 209/209 tests passing.
+**Current status:** Phases 1–5.4 complete (2026-03-25). P-5.3 adds Server-Side Lag Compensation: InputPayload extended to 40 bits (+ clientTickID:16), GameWorld::RecordTick/GetStateAtTick circular rewind buffer (32 slots / 320ms), HitValidator::CheckHit geometry helper. P-5.4 adds Network LOD: Brain::PriorityEvaluator assigns Tier 0/1/2 per (observer, entity) pair using interest=(1+4×inCombat)/distance; inCombat by proximity (kCombatRadius=200u); Tier 0=100Hz, Tier 1=50Hz, Tier 2=20Hz; Phase 0b in main loop before gather. 223/223 tests passing.
 
 **Validated benchmark results (P-4.3, WSL2, Release):**
 - Tick budget: **1.1%** (0.11ms / 10ms) with 47 clients under degraded network (100ms / 2% loss)
 - Delta Efficiency: **99%** — the middleware sends 1% of what a full-sync system would
 - NOTE: These numbers will change now that Snapshot packets are sent each tick (expect Out ~20-40 kbps, Delta Efficiency ~60-80% under real game load)
-- 204/204 tests passing (Windows/MSVC)
+- 223/223 tests passing (Windows/MSVC)
 
 ## Build Commands
 
@@ -89,6 +89,8 @@ P-4.4  Dynamic Job System — WorkStealingQueue (mutex-per-thread, LIFO/FIFO), J
 P-4.5  CRC32 Packet Integrity — IEEE 802.3 (0xEDB88320), constexpr lookup table, 4-byte trailer on every outgoing packet, verify+discard on receive; NetworkProfiler::crcErrors counter; --sequential server flag for Scalability Gauntlet benchmark
 P-5.1  Spatial Hashing & FOW — 20×20 SpatialGrid (50 u/cell), std::bitset<400>[2] team visibility, MarkVision per hero each tick, IsCellVisible culls snapshot tasks; GameplayConstants.h (MAP_MIN/MAX, VISION_CELL_RADIUS=4); round-robin teamID in RemoteClient; multi-entity snapshot pipeline (clients × visible entities)
 P-5.2  Silent Kalman Prediction — Brain::KalmanPredictor, 4-state CV model [x,y,vx,vy], F/H/Q/R matrices, predict+update cycle in main.cpp step 2; synthesizes InputPayload on missing input ticks; no wire-format change; PredictedInput type keeps Brain dep-free from Shared; Q_vel=5.0 for MOBA direction-change responsiveness
+P-5.3  Server-Side Lag Compensation — InputPayload extended 24→40 bits (clientTickID:16); GameWorld::RecordTick/GetStateAtTick per-entity circular rewind buffer (kRewindSlots=32, 320ms window); HitValidator::CheckHit header-only geometry; main.cpp rewinds target to clientTickID (clamped to kMaxRewindTicks=20) on ability input and logs hit validation
+P-5.4  Network LOD / AI Replication — Brain::PriorityEvaluator assigns Tier 0/1/2 per (observer, entity); interest=(kBaseWeight+kCombatBonus×inCombat)/dist, inCombat=proximity proxy (kCombatRadius=200u); Tier 0=100Hz, Tier 1=50Hz (even ticks), Tier 2=20Hz (every 5th); Phase 0b in main loop computes tiers before gather; FOW filter applied first; no Phase A/B changes
 ```
 
 ## Key Interfaces

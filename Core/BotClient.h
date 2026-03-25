@@ -77,6 +77,10 @@ namespace NetworkMiddleware::Core {
         uint64_t m_reconnectionToken = 0;
         uint64_t m_pendingSalt       = 0;
 
+        // P-5.3: monotone counter stamped on every outgoing InputPayload so the
+        // server can locate the correct rewind snapshot for lag compensation.
+        uint16_t m_localTick = 0;
+
         // Tracks outgoing sequence numbers and incoming ACK state for piggybacking.
         Shared::SequenceContext m_seqCtx;
     };
