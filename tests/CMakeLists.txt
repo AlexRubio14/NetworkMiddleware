@@ -42,10 +42,12 @@ target_include_directories(MiddlewareTests PRIVATE
 )
 
 # Coverage instrumentation (GCC/Clang on Linux only)
+# -fprofile-update=atomic prevents negative counter values when JobSystem's
+# worker threads update gcov counters concurrently via std::function callbacks.
 if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(MiddlewareTests  PRIVATE --coverage)
-    target_compile_options(MiddlewareShared PUBLIC  --coverage)
-    target_compile_options(MiddlewareCore   PUBLIC  --coverage)
+    target_compile_options(MiddlewareTests  PRIVATE --coverage -fprofile-update=atomic)
+    target_compile_options(MiddlewareShared PUBLIC  --coverage -fprofile-update=atomic)
+    target_compile_options(MiddlewareCore   PUBLIC  --coverage -fprofile-update=atomic)
     target_link_options(MiddlewareTests PRIVATE --coverage)
 endif()
 
