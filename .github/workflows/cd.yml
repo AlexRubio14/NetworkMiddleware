@@ -16,18 +16,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SFML via vcpkg (static)
-        run: vcpkg install "sfml[network]:x64-windows-static"
-        env:
-          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      - name: Build SFML 2.6.2 static (network + system only)
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 2.6.2 https://github.com/SFML/SFML.git C:/sfml-src
+          cmake -S C:/sfml-src -B C:/sfml-build `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DSFML_BUILD_AUDIO=OFF `
+            -DSFML_BUILD_GRAPHICS=OFF `
+            -DSFML_BUILD_WINDOW=OFF `
+            -DSFML_BUILD_NETWORK=ON `
+            -DSFML_BUILD_SYSTEM=ON
+          cmake --build C:/sfml-build --config Release
+          cmake --install C:/sfml-build --config Release --prefix C:/sfml
 
       - name: Configure
         run: >
           cmake -B build
           -DSFML_STATIC_LIBRARIES=ON
           -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static
-          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DSFML_DIR=C:/sfml/lib/cmake/SFML
 
       - name: Build
         run: cmake --build build --config Release
