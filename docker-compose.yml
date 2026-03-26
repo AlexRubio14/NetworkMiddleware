@@ -1,0 +1,37 @@
+# NetworkMiddleware — P-4.1/4.2 Simulation Infrastructure
+#
+# Usage:
+#   docker-compose build
+#   docker-compose up --scale bot=10
+#
+# network_mode: host (Linux only)
+#   Both server and bots share the host network stack — no bridge NAT, lowest
+#   UDP latency.  Docker Desktop on Windows silently ignores this flag and uses
+#   bridge networking instead.  In that case, override SERVER_HOST to the
+#   server container's IP (or use "server" if you switch to bridge mode here).
+
+version: '3.8'
+
+services:
+
+  server:
+    build:
+      context: .
+      target: server
+    network_mode: host
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      target: bot
+    network_mode: host
+    environment:
+      # 127.0.0.1 works with network_mode: host on Linux.
+      # On Docker Desktop Windows (bridge fallback): change to the server
+      # container IP, or remove network_mode: host and use SERVER_HOST=server.
+      - SERVER_HOST=127.0.0.1
+      - SERVER_PORT=7777
+    depends_on:
+      - server
+    restart: on-failure

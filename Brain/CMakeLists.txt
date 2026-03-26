@@ -8,6 +8,10 @@ add_library(Brain STATIC
         BehaviorTree.h
         Interfaces/IDataProcessor.h
         Interfaces/IBehaviorEngine.h
+        KalmanPredictor.cpp
+        KalmanPredictor.h
+        PriorityEvaluator.cpp
+        PriorityEvaluator.h
 )
 
 target_include_directories(Brain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

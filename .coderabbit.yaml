@@ -1,0 +1,88 @@
+language: "en-US"
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  path_instructions:
+    - path: "Shared/**"
+      instructions: |
+        This module contains BitWriter, BitReader, NetworkOptimizer and HeroState structs.
+        Review for:
+        - Bit-packing correctness: verify LSB-first ordering is consistent between BitWriter and BitReader (write/read symmetry)
+        - Dirty mask logic: dirtyMask must be 0xFFFFFFFF on first tick; field bits must match their SetNetworkVar<T> definitions exactly
+        - Position quantization: float → 14-bit conversions must preserve 1.75cm precision on a 1000m map
+        - VLE/Varints: Base-128 encoding must grow dynamically and decode symmetrically
+        - Memory alignment: HeroState is a POD struct — check for padding issues, struct layout, and alignment that could break cross-platform serialization
+        - Endianness: only bitwise operators (<<, >>, &, |) are allowed for bit manipulation. No memcpy on multi-byte values across platform boundaries. SwapEndian calls are a bug here.
+        - GetCompressedData: buffer must be trimmed to actual bits written, never send pre-allocated zeros
+
+    - path: "Transport/**"
+      instructions: |
+        This module is the ONLY layer that knows SFML exists (Adapter pattern).
+        Review for:
+        - ITransport interface compliance: SFMLTransport must not leak SFML types (sf::UdpSocket, sf::IpAddress) outside this module
+        - Raw byte contract: functions must send/receive std::vector<uint8_t> only — no game logic, no packet interpretation
+        - Socket error handling: all SFML socket return codes must be checked and propagated
+        - No direct instantiation of SFMLTransport outside TransportFactory
+        - Thread safety: if transport is accessed from multiple threads, verify there are no data races on the socket
+
+    - path: "Core/**"
+      instructions: |
+        This is the organizational core — it must remain engine-agnostic and library-agnostic.
+        Review for:
+        - NetworkManager must NOT have direct references to BrainManager or any AI module — only std::function callbacks
+        - Dependency Injection: all dependencies must be injected via constructor, never via global state or Singleton
+        - No SFML includes or any Transport-layer types in Core headers
+        - Callback registration must happen in main.cpp (Composition Root), not inside Core classes
+        - PacketManager delegation: verify packets are correctly dispatched without copying unnecessarily (prefer shared_ptr or move semantics)
+        - Thread safety: the network receive thread and the processing thread must not share mutable state without synchronization
+
+    - path: "Brain/**"
+      instructions: |
+        This module contains the AI systems: Dynamic Thread Pool and Predictive Trajectory AI.
+        Review for:
+        - jthread lifecycle: all std::jthread instances must be properly joined or detached; no detached threads that outlive their data
+        - Dynamic thread scaling: verify the scaling algorithm does not oscillate (thrash) under rapid load changes
+        - Predictive AI: regression model inputs must be bounded; verify no division by zero or NaN in trajectory calculations
+        - Telemetry: CPU/network metrics collection must be non-blocking (async) to avoid adding latency to the network thread
+        - Brain must be consulted via the callback/query interface only — it must NOT call back into Core directly
+
+    - path: "Server/**"
+      instructions: |
+        Review for:
+        - main.cpp as Composition Root: all DI wiring happens here — verify no `new` calls for concrete types outside of factories
+        - Tick loop: each cycle must complete in < 10ms (100Hz target); flag any blocking calls inside the tick loop
+        - Signal handling: server must handle SIGINT/SIGTERM gracefully, flushing the async logger queue before exit
+        - No hardcoded IPs or ports — use configuration
+
+    - path: "**/*.h"
+      instructions: |
+        Header review for this C++20 project:
+        - Prefer forward declarations over includes where possible to keep compile times low
+        - All interfaces (ITransport, etc.) must be pure virtual with virtual destructor
+        - No implementation in headers except for templates and constexpr
+        - Check for include guards or #pragma once consistency
+        - Verify namespace NetworkMiddleware wraps all declarations
+
+    - path: "CMakeLists.txt"
+      instructions: |
+        Review for:
+        - Correct target_link_libraries for each module (MiddlewareCore, MiddlewareShared, MiddlewareTransport, Brain)
+        - No circular dependencies between modules
+        - C++20 standard must be enforced (set_property TARGET ... CXX_STANDARD 20)
+        - SFML dependency must be linked ONLY to MiddlewareTransport, not to Core or Shared
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - develop
+
+chat:
+  auto_reply: true
