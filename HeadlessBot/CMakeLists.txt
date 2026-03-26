@@ -8,3 +8,5 @@ target_link_libraries(HeadlessBot PRIVATE
     MiddlewareShared
     Threads::Threads
 )
+
+install(TARGETS HeadlessBot RUNTIME DESTINATION .)

@@ -1,0 +1,115 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows: SFML static → standalone .exe ─────────────────────────────────
+  build-windows:
+    name: Build Windows (static)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SFML via vcpkg (static)
+        run: vcpkg install sfml:x64-windows-static
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DSFML_STATIC_LIBRARIES=ON
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          cmake --install build --config Release --prefix dist
+          Compress-Archive -Path dist/* -DestinationPath NetServer-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: NetServer-windows-x64.zip
+
+  # ── Linux: dinámica (usuarios instalan libsfml-dev) ────────────────────────
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SFML
+        run: sudo apt-get update && sudo apt-get install -y libsfml-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          cmake --install build --prefix dist
+          tar -czf NetServer-linux-x64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: NetServer-linux-x64.tar.gz
+
+  # ── GitHub Release ──────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate tag
+        id: tag
+        run: |
+          echo "tag=release-$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "NetworkMiddleware ${{ steps.tag.outputs.tag }}"
+          make_latest: true
+          body: |
+            ## NetworkMiddleware Authoritative Server
+
+            ### Windows — standalone, no dependencies
+            1. Download `NetServer-windows-x64.zip`
+            2. Extract anywhere
+            3. Double-click `NetServer.exe`
+
+            SFML is compiled in — nothing else to install.
+
+            **Or install with one command (PowerShell):**
+            ```powershell
+            irm https://raw.githubusercontent.com/AlexRubio14/NetworkMiddleware/main/install.ps1 | iex
+            ```
+
+            ### Linux
+            ```bash
+            sudo apt-get install libsfml-dev
+            tar -xzf NetServer-linux-x64.tar.gz
+            ./NetServer
+            ```
+          files: |
+            windows-x64/NetServer-windows-x64.zip
+            linux-x64/NetServer-linux-x64.tar.gz

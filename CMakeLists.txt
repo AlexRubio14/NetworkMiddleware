@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_TESTS "Build unit tests (skips SFML-dependent modules)" OFF)
+option(SFML_STATIC_LIBRARIES "Link SFML statically (required for standalone distribution)" OFF)
 
 add_subdirectory(Shared)
 add_subdirectory(Core)

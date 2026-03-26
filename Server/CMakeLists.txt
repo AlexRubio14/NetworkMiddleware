@@ -11,3 +11,5 @@ target_link_libraries(NetServer PRIVATE
         MiddlewareShared
         Threads::Threads
 )
+
+install(TARGETS NetServer RUNTIME DESTINATION .)
