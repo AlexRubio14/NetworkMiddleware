@@ -6,13 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — a C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux, validated via a Visual Debugger (Unreal Engine ActorComponent plugin). Not a game itself. Goal: outperform commercial middlewares (Photon Bolt, Mirror, UE Replication) in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–5.4 complete + P-5.x regression fixes (2026-03-25). Fixed two bugs found in P-5.x regression benchmark: (1) multi-entity delta baseline corruption — RemoteClient now uses per-entity baseline via RecordBatch/ProcessAckedSeq/GetEntityBaseline instead of GetBaseline(lastAckedSeq); (2) O(clients×entities) UDP sends — snapshot pipeline batches all visible entities per client into one packet, reducing Phase B sends from 2116 to 46 in Zerg scenario. Wire format updated: [tickID:32][count:8][entity_0...][entity_N-1...]. 230/230 tests passing.
+**Current status:** Phases 1–5.x complete (2026-03-26). Pre-Fase 6 audit complete. Fixed two bugs in P-5.x regression benchmark: (1) multi-entity delta baseline corruption — RemoteClient now uses per-entity baseline via RecordBatch/ProcessAckedSeq/GetEntityBaseline; (2) O(clients×entities) UDP sends — batch snapshot pipeline reduces Phase B from 2116→46 sends in Zerg. Speed-hack detection active in GameWorld::ApplyInput (kSpeedTolerance gate). Wire format: [tickID:32][count:8][entity_0...][entity_N-1...]. 231/231 tests passing.
+
+**Architecture notes (for Memoria):**
+- Phase 4.6 (Adaptive Tick-Rate) intentionally skipped — benchmark shows ≤17% tick budget; fixed 100Hz is sufficient.
+- Phase 5.5 (Minions/Towers tiering) out of TFG scope — PriorityEvaluator is generic but GameWorld only manages hero entities (ViegoEntity). Sufficient to prove the middleware concept.
+- Brain layer: KalmanPredictor (P-5.2) and PriorityEvaluator (P-5.4) are the active components. BrainManager/NeuralProcessor/BehaviorTree are Phase 6+ stubs — not connected to the main loop.
 
 **Validated benchmark results (P-4.3, WSL2, Release):**
 - Tick budget: **1.1%** (0.11ms / 10ms) with 47 clients under degraded network (100ms / 2% loss)
 - Delta Efficiency: **99%** — the middleware sends 1% of what a full-sync system would
 - NOTE: P-5.x regression fixes pending re-benchmark. Expected: Full Loop ~2-4ms in Zerg, Delta Efficiency ~60-80% in clean scenarios.
-- 230/230 tests passing (Windows/MSVC)
+- 231/231 tests passing (Windows/MSVC)
 
 ## Build Commands
 

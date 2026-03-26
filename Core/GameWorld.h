@@ -34,7 +34,7 @@ namespace NetworkMiddleware::Core {
     public:
         static constexpr float  kMoveSpeed     = 100.0f;  // units per second
         static constexpr float  kMapBound       = 500.0f;  // ±X and ±Y limit
-        static constexpr float  kSpeedTolerance = 5.0f;   // reserved for future anti-cheat checks
+        static constexpr float  kSpeedTolerance = 5.0f;   // max displacement per tick (units) — ApplyInput rejects any step that exceeds this
 
         // P-5.3 Lag Compensation: 32 slots × 10ms = 320ms rewind window (> 200ms limit).
         static constexpr size_t kRewindSlots   = 32;

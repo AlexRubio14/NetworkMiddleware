@@ -153,6 +153,20 @@ TEST(GameWorld, AntiCheat_InputClamped_OverNormalized) {
     EXPECT_NEAR(s->x, 1.0f, 0.001f);
 }
 
+TEST(GameWorld, AntiCheat_SpeedHack_LargeDt_Rejected) {
+    // dt = 1.0 s (100× the normal 0.01 s tick).
+    // Computed displacement = 100 × 1.0 = 100 units >> kSpeedTolerance (5.0 units).
+    // Hero must stay at origin — the input is silently rejected.
+    GameWorld gw;
+    gw.AddHero(1);
+    gw.ApplyInput(1, {1.0f, 0.0f, 0}, 1.0f);
+
+    const auto* s = gw.GetHeroState(1);
+    ASSERT_NE(s, nullptr);
+    EXPECT_FLOAT_EQ(s->x, 0.0f);
+    EXPECT_FLOAT_EQ(s->y, 0.0f);
+}
+
 TEST(GameWorld, AntiCheat_ClampsToBounds) {
     // Place hero near right boundary, push further right → must clamp to kMapBound
     GameWorld gw;

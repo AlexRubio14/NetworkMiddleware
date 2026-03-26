@@ -8,6 +8,17 @@
 
 namespace NetworkMiddleware::Brain {
 
+    /**
+     * BrainManager — Phase 6+ orchestrator stub.
+     * NOT connected to the main game loop.
+     *
+     * Active Brain components (used in the loop today):
+     *   - KalmanPredictor  (P-5.2) — trajectory prediction on packet loss
+     *   - PriorityEvaluator (P-5.4) — Tier 0/1/2 replication scheduling
+     *
+     * BrainManager will orchestrate NeuralProcessor + BehaviorTree in Fase 6
+     * (Unreal Visual Bridge), once a real data pipeline exists.
+     */
     class BrainManager {
     private:
 
