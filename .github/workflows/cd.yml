@@ -213,3 +213,26 @@ jobs:
             ghcr.io/${{ steps.owner.outputs.name }}/headlessbot:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Deploy: SSH → Azure VM → pull + restart ─────────────────────────────────
+  deploy-azure:
+    name: Deploy to Azure VM
+    needs: docker-publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AZURE_VM_IP }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+          script: |
+            docker pull ghcr.io/alexrubio14/netserver:latest
+            docker stop netserver || true
+            docker rm netserver || true
+            docker run -d \
+              --name netserver \
+              --network host \
+              --restart unless-stopped \
+              ghcr.io/alexrubio14/netserver:latest
+            docker logs --tail 20 netserver
