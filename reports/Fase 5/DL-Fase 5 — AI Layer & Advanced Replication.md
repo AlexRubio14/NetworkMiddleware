@@ -247,6 +247,53 @@ El tick budget más alto es 16.2% en el escenario más exigente (50 bots, red de
 
 ---
 
+## Análisis de los resultados del benchmark
+
+### El problema de comparabilidad con P-4.3
+
+La primera lectura del benchmark genera una reacción instintiva: "el middleware ha empeorado — antes tenía 99% de eficiencia, ahora tiene 74%". Esa lectura es incorrecta porque compara sistemas en condiciones de carga radicalmente distintas.
+
+**P-4.3** fue un test de infraestructura pura. Los bots se conectaban pero no recibían estado de juego real: no había `gameWorld` activo, las posiciones no cambiaban, las dirty masks eran siempre 0 entre ticks. El delta compression veía secuencias idénticas de HeroState → eficiencia vacua del 99% (*"nada cambia, nada hay que enviar"*). La salida de 1 kbps no era bandwidth eficiente — era bandwidth casi inexistente.
+
+**P-5.x** corre con un mundo vivo: 50 héroes moviéndose a 100Hz, visibilidad por equipo calculada cada tick, lag compensation grabando 32 estados históricos por entidad, LOD priorizando en tiempo real. Es el primer benchmark que mide el middleware haciendo su trabajo real.
+
+La analogía correcta para la Memoria del TFG: el camión de P-4.3 viajaba vacío y reportaba 99% de eficiencia de combustible. El camión de P-5.x lleva 100 toneladas de carga y sigue operando al 16% de su presupuesto de CPU. El segundo número es el que importa.
+
+### Lo que validan los tres escenarios
+
+**Escenario A (Clean Lab, 10 bots, red perfecta):** 69% de eficiencia con héroes moviéndose activamente. En condiciones reales de MOBA — donde posición y HP cambian cada tick — encontrar el 69% de datos redundantes confirma que el diseño de dirty bits y ZigZag+VLE funciona correctamente.
+
+**Escenario B (Real World, 10 bots, 50ms/5% loss):** La pérdida de paquetes reduce la eficiencia a 64% — el servidor no puede delta-comprimir cuando el cliente no puede confirmar los ACKs. Es el comportamiento esperado: sin baseline confirmado, full sync. La caída de solo 5 puntos respecto al escenario limpio indica que el sistema de ACK window (`ack_bits` 32-seq) recupera la mayoría de las confirmaciones incluso con 5% de pérdida.
+
+**Escenario C (Stress/Zerg, 50 bots, 100ms/2% loss):** 74% de eficiencia supera al escenario A porque la escena Zerg concentra a todos los héroes — más entidades visibles por cliente significa más entidades que rara vez cambian de estado (las que están fuera del foco de combate) y que el delta comprime bien. El LOD (Tier 1/2) suprime ticks enteros para entidades lejanas, reduciendo el volumen bruto.
+
+### El número que no escala mal: 302 kbps por cliente
+
+```
+13,936 kbps / 46 clientes = 302 kbps/cliente
+```
+
+Una conexión doméstica de fibra tiene 50–100 Mbps de upstream. 302 kbps representa el 0.6% de esa capacidad. Para comparar: Counter-Strike 2 consume ~128 kbps en modo competitivo; Valorant ~300 kbps; League of Legends ~60–100 kbps (tick rate más bajo). El middleware está en rango competitivo en el peor escenario de carga, a 100Hz real — cinco veces el tick rate de la mayoría de los juegos comerciales.
+
+### El 84% de margen que no se ve en los números
+
+El Full Loop de 1.62ms en Scenario C descompuesto:
+
+```
+Phase 0b (PriorityEvaluator O(N²)):  ~0.3ms estimado
+Phase A  (serialización paralela):   ~0.6ms estimado
+Phase B  (46 sends seriales):        ~0.5ms estimado (46 × ~11µs en WSL2 post-fix)
+Overhead (RecordTick, Kalman, etc.): ~0.2ms estimado
+─────────────────────────────────────────────────────
+Total:                                 1.62ms
+Budget:                               10.00ms
+Margen:                                8.38ms (83.8%)
+```
+
+Esos 8.38ms son el espacio donde vive Fase 6: físicas, habilidades complejas, más entidades, interpolación. El diseño modular permite añadir capas sin presión sobre el tick budget.
+
+---
+
 ## Conceptos nuevos en esta fase
 
 | Concepto | Qué es | Por qué importa |
