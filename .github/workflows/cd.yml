@@ -24,6 +24,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DSFML_USE_STATIC_STD_LIBS=TRUE `
             -DSFML_BUILD_AUDIO=OFF `
             -DSFML_BUILD_GRAPHICS=OFF `
             -DSFML_BUILD_WINDOW=OFF `
