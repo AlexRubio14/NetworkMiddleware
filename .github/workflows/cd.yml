@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   # ── Windows: SFML static → standalone .exe ─────────────────────────────────
@@ -16,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install SFML via vcpkg (static)
-        run: vcpkg install sfml:x64-windows-static
+        run: vcpkg install "sfml[network,system]:x64-windows-static"
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
 
@@ -151,3 +152,49 @@ jobs:
           files: |
             windows-x64/NetServer-windows-x64.zip
             linux-x64/NetServer-linux-x64.AppImage
+
+  # ── Docker: imagen multi-arch (amd64 + arm64) → GHCR ────────────────────────
+  docker-publish:
+    name: Publish Docker (amd64 + arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push NetServer
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: server
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/netserver:latest
+            ghcr.io/${{ github.repository_owner }}/netserver:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push HeadlessBot
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: bot
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/headlessbot:latest
+            ghcr.io/${{ github.repository_owner }}/headlessbot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
