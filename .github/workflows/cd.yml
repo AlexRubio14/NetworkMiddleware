@@ -220,19 +220,19 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AZURE_SSH_KEY }}" > ~/.ssh/azure_key
+          chmod 600 ~/.ssh/azure_key
+          ssh-keyscan -H ${{ secrets.AZURE_VM_IP }} >> ~/.ssh/known_hosts
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.AZURE_VM_IP }}
-          username: ${{ secrets.AZURE_VM_USER }}
-          key: ${{ secrets.AZURE_SSH_KEY }}
-          script: |
-            docker pull ghcr.io/alexrubio14/netserver:latest
-            docker stop netserver || true
-            docker rm netserver || true
-            docker run -d \
-              --name netserver \
-              --network host \
-              --restart unless-stopped \
-              ghcr.io/alexrubio14/netserver:latest
+        run: |
+          ssh -i ~/.ssh/azure_key ${{ secrets.AZURE_VM_USER }}@${{ secrets.AZURE_VM_IP }} '
+            docker pull ghcr.io/alexrubio14/netserver:latest &&
+            (docker stop netserver || true) &&
+            (docker rm netserver || true) &&
+            docker run -d --name netserver --network host --restart unless-stopped ghcr.io/alexrubio14/netserver:latest &&
             docker logs --tail 20 netserver
+          '
