@@ -3,17 +3,11 @@
 
 namespace NetworkMiddleware::Brain {
 
-std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
-    uint32_t                             observerID,
-    float                                observerX,
-    float                                observerY,
+std::vector<bool> PriorityEvaluator::ComputeInCombat(
     const std::vector<EvaluationTarget>& allEntities) const
 {
-    // Pass 1: determine inCombat flag for each entity.
-    // An entity is "in combat" if any opposing-team entity is within kCombatRadius.
     const size_t n = allEntities.size();
     std::vector<bool> inCombat(n, false);
-
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = 0; j < n; ++j) {
             if (i == j) continue;
@@ -26,8 +20,17 @@ std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
             }
         }
     }
+    return inCombat;
+}
 
-    // Pass 2: assign tier per entity from observer's perspective.
+std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
+    uint32_t                             observerID,
+    float                                observerX,
+    float                                observerY,
+    const std::vector<EvaluationTarget>& allEntities,
+    const std::vector<bool>&             inCombat) const
+{
+    const size_t n = allEntities.size();
     std::vector<EntityRelevance> result;
     result.reserve(n);
 
@@ -36,7 +39,6 @@ std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
         EntityRelevance rel;
         rel.entityID = target.entityID;
 
-        // Own hero is always Tier 0.
         if (target.entityID == observerID) {
             rel.tier = 0;
             result.push_back(rel);
@@ -61,6 +63,16 @@ std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
     }
 
     return result;
+}
+
+std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
+    uint32_t                             observerID,
+    float                                observerX,
+    float                                observerY,
+    const std::vector<EvaluationTarget>& allEntities) const
+{
+    return Evaluate(observerID, observerX, observerY, allEntities,
+                    ComputeInCombat(allEntities));
 }
 
 }  // namespace NetworkMiddleware::Brain

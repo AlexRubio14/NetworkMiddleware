@@ -546,11 +546,19 @@ namespace NetworkMiddleware::Core {
             return header.IsAcked(entry.first);
         });
 
-        // P-3.7: Track the last server seq the client has confirmed (header.ack is the
-        // client's piggyback ACK for server-sent packets). Used by SendSnapshot() to
-        // select the correct delta baseline.
-        client.m_lastClientAckedServerSeq     = header.ack;
-        client.m_lastClientAckedServerSeqValid = true;
+        // P-5.x: Promote confirmed snapshot batches into per-entity delta baselines.
+        // header.ack = most recently received seq; ack_bits = the previous 32.
+        // Processing the full window ensures entities from earlier ticks in the same
+        // RTT window also get their baselines updated (important with multiple entities
+        // per client per tick consuming consecutive sequence numbers).
+        client.ProcessAckedSeq(header.ack);
+        {
+            uint32_t bits = header.ack_bits;
+            for (int i = 0; i < 32 && bits; ++i, bits >>= 1) {
+                if (bits & 1u)
+                    client.ProcessAckedSeq(static_cast<uint16_t>(header.ack - 1 - i));
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -796,6 +804,18 @@ namespace NetworkMiddleware::Core {
         return m_profiler.GetSnapshot(m_establishedClients.size());
     }
 
+    void NetworkManager::RecordEntitySnapshotsSent(size_t count) noexcept {
+        m_profiler.RecordEntitySnapshotsSent(count);
+    }
+
+    void NetworkManager::RecordSnapshotBytesSent(size_t bytes) noexcept {
+        m_profiler.RecordSnapshotBytesSent(bytes);
+    }
+
+    void NetworkManager::RecordFullTick(uint64_t microseconds) noexcept {
+        m_profiler.RecordFullTick(microseconds);
+    }
+
     bool NetworkManager::IsClientZombie(const Shared::EndPoint& ep) const {
         const auto it = m_establishedClients.find(ep);
         return it != m_establishedClients.end() && it->second.isZombie;
@@ -804,15 +824,16 @@ namespace NetworkMiddleware::Core {
     // -------------------------------------------------------------------------
     // SerializeSnapshot (private, const) — P-4.4 Split-Phase
     //
-    // Pure serialization: builds the wire payload for a snapshot without
-    // modifying any client state.  Safe to call from Job System worker threads
-    // while the main thread is blocked on std::latch::wait(), because:
-    //   • m_establishedClients is not modified during Phase A.
-    //   • RemoteClient fields read here (m_history, m_lastClientAckedServerSeq)
-    //     were written in previous ticks and are stable during Phase A.
-    //   • BitWriter is a local object — no aliasing.
+    // Pure serialization: builds the wire payload for a single-entity snapshot.
+    // Safe for Job System worker threads (read-only on RemoteClient state).
     //
-    // Wire format: [tickID:32][HeroState bits — delta or full]
+    // P-5.x: baseline is selected per entity via GetEntityBaseline(networkID),
+    // which returns the last state the client confirmed via ACK.  This fixes
+    // the multi-entity baseline corruption introduced in P-5.1: previously
+    // GetBaseline(lastAckedSeq) returned the state of whichever entity happened
+    // to own that sequence — wrong for every entity except the last one.
+    //
+    // Wire format (single-entity path): [tickID:32][HeroState bits — delta or full]
     // -------------------------------------------------------------------------
     std::vector<uint8_t> NetworkManager::SerializeSnapshot(
         const RemoteClient& client,
@@ -822,10 +843,7 @@ namespace NetworkMiddleware::Core {
         Shared::BitWriter writer;
         writer.WriteBits(tickID, 32);
 
-        const Shared::Data::HeroState* baseline = nullptr;
-        if (client.m_lastClientAckedServerSeqValid)
-            baseline = client.GetBaseline(client.m_lastClientAckedServerSeq);
-
+        const Shared::Data::HeroState* baseline = client.GetEntityBaseline(state.networkID);
         if (baseline)
             Shared::Network::HeroSerializer::SerializeDelta(state, *baseline, writer);
         else
@@ -873,8 +891,12 @@ namespace NetworkMiddleware::Core {
 
         RemoteClient& client = it->second;
         const uint16_t usedSeq = client.seqContext.localSequence;
-        client.RecordSnapshot(usedSeq, state);
+        client.RecordBatch(usedSeq, {{state.networkID, state}});
         Send(to, payload, Shared::PacketType::Snapshot);
+        // Record snapshot-only bytes for accurate Delta Efficiency (excludes control traffic).
+        // Wire size = header (13) + payload + CRC trailer (4).
+        m_profiler.RecordSnapshotBytesSent(
+            Shared::PacketHeader::kByteCount + payload.size() + 4);
     }
 
     // -------------------------------------------------------------------------
@@ -886,15 +908,90 @@ namespace NetworkMiddleware::Core {
     void NetworkManager::SendSnapshot(const Shared::EndPoint& to,
                                       const Shared::Data::HeroState& state,
                                       uint32_t tickID) {
+        // Single-entity convenience path: delegates to the batch API so that
+        // the wire format is identical (tickID:32 + count:8 + entity bits).
+        const std::vector<Shared::Data::HeroState> states = {state};
+        auto it = m_establishedClients.find(to);
+        if (it == m_establishedClients.end())
+            return;
+        const auto payload = SerializeBatchSnapshot(it->second, states, tickID);
+        CommitAndSendBatchSnapshot(to, states, payload);
+    }
+
+    // -------------------------------------------------------------------------
+    // SerializeBatchSnapshot (private, const) — P-5.x multi-entity path
+    //
+    // Serializes all entity states for one client into a single wire buffer.
+    // Each entity uses its per-entity delta baseline from m_entityBaselines
+    // (set by ProcessAckedSeq), falling back to a full sync if not yet confirmed.
+    //
+    // Wire format: [tickID:32][count:8][entity_0 bits][entity_1 bits]...[entity_N-1 bits]
+    // count fits in 8 bits (max 255 entities per game is a safe assumption).
+    // -------------------------------------------------------------------------
+    std::vector<uint8_t> NetworkManager::SerializeBatchSnapshot(
+        const RemoteClient& client,
+        const std::vector<Shared::Data::HeroState>& states,
+        uint32_t tickID) const
+    {
+        Shared::BitWriter writer;
+        writer.WriteBits(tickID, 32);
+        writer.WriteBits(static_cast<uint32_t>(states.size()), 8);
+
+        for (const auto& state : states) {
+            const Shared::Data::HeroState* baseline = client.GetEntityBaseline(state.networkID);
+            if (baseline)
+                Shared::Network::HeroSerializer::SerializeDelta(state, *baseline, writer);
+            else
+                Shared::Network::HeroSerializer::Serialize(state, writer);
+        }
+
+        return writer.GetCompressedData();
+    }
+
+    // -------------------------------------------------------------------------
+    // SerializeBatchSnapshotFor (public const) — P-5.x Phase A entry point
+    // -------------------------------------------------------------------------
+    std::vector<uint8_t> NetworkManager::SerializeBatchSnapshotFor(
+        const Shared::EndPoint& to,
+        const std::vector<Shared::Data::HeroState>& states,
+        uint32_t tickID) const
+    {
+        const auto it = m_establishedClients.find(to);
+        if (it == m_establishedClients.end())
+            return {};
+        return SerializeBatchSnapshot(it->second, states, tickID);
+    }
+
+    // -------------------------------------------------------------------------
+    // CommitAndSendBatchSnapshot (public) — P-5.x Phase B entry point
+    //
+    // Records all entity states in the batch history (for future delta baselines),
+    // sends the pre-built payload, and updates profiler counters.
+    // One UDP send per client per tick regardless of entity count.
+    // -------------------------------------------------------------------------
+    void NetworkManager::CommitAndSendBatchSnapshot(
+        const Shared::EndPoint& to,
+        const std::vector<Shared::Data::HeroState>& states,
+        const std::vector<uint8_t>& payload)
+    {
         auto it = m_establishedClients.find(to);
         if (it == m_establishedClients.end())
             return;
 
         RemoteClient& client = it->second;
         const uint16_t usedSeq = client.seqContext.localSequence;
-        const auto payload = SerializeSnapshot(client, state, tickID);
-        client.RecordSnapshot(usedSeq, state);
+
+        std::vector<std::pair<uint32_t, Shared::Data::HeroState>> batchEntries;
+        batchEntries.reserve(states.size());
+        for (const auto& state : states)
+            batchEntries.push_back({state.networkID, state});
+
+        client.RecordBatch(usedSeq, batchEntries);
         Send(to, payload, Shared::PacketType::Snapshot);
+
+        m_profiler.RecordSnapshotBytesSent(
+            Shared::PacketHeader::kByteCount + payload.size() + 4);
+        m_profiler.RecordEntitySnapshotsSent(states.size());
     }
 
     // -------------------------------------------------------------------------

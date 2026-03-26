@@ -4,16 +4,15 @@
 // P-4.4 adds the Dynamic Work-Stealing Job System and the Split-Phase
 // snapshot pipeline:
 //
-//   Phase A (parallel): Job System serializes each client's snapshot
-//                       concurrently using SerializeSnapshotFor().
-//   Phase B (main):     CommitAndSendSnapshot() records history and
-//                       transmits pre-built payloads sequentially.
+//   Phase A (parallel): Job System serializes each client's batch snapshot
+//                       concurrently using SerializeBatchSnapshotFor().
+//   Phase B (main):     CommitAndSendBatchSnapshot() records history and
+//                       transmits one packet per client sequentially.
 //
 // P-4.5 adds CRC32 packet integrity (trailer on every outgoing packet,
 // verify+discard on every incoming packet) and a --sequential flag for
 // the Scalability Gauntlet benchmark:
-//   --sequential: disable Split-Phase; dispatch snapshots on the main
-//                 thread (SendSnapshot), Job System stays idle.
+//   --sequential: disable Split-Phase; serialize + send inline per client.
 //
 // P-5.2 adds Silent Server-Side Kalman Prediction (Brain::KalmanPredictor).
 // When a client's input packet is missing for a tick, the predictor
@@ -197,12 +196,15 @@ int main(int argc, char* argv[]) {
     constexpr auto  kTickInterval = std::chrono::microseconds(10'000);  // 100 Hz
     constexpr float kFixedDt      = 0.01f;                              // seconds
 
-    // Snapshot task: holds endpoint, a value-copy of HeroState, and the output buffer.
-    // Value copy ensures workers read stable data while main thread is at latch::wait().
+    // P-5.x Batch snapshot task: one entry per client, holds ALL visible entity
+    // states for that observer.  Phase A serializes the entire batch into one
+    // wire buffer; Phase B sends it in a single UDP packet.
+    // This reduces send() calls from O(clients × entities) to O(clients) per tick,
+    // eliminating the WSL2 syscall overhead that caused Scenario C's 39.5ms full loop.
     struct SnapshotTask {
-        EndPoint              ep;
-        Data::HeroState       state;   // copy — workers are read-only on this
-        std::vector<uint8_t>  buffer;  // output filled by the worker job
+        EndPoint                        ep;
+        std::vector<Data::HeroState>    states;   // all visible entities for this observer
+        std::vector<uint8_t>            buffer;   // output filled by the worker job
     };
 
     // Full-loop EMA for JobSystem scaling.
@@ -213,6 +215,17 @@ int main(int argc, char* argv[]) {
     // covers the entire work window (steps 1-6, before sleep_until).
     float loopEmaMs   = 0.0f;
     constexpr float kLoopAlpha = 0.1f;
+
+    // Persistent per-tick scratch storage — allocated once, cleared each tick.
+    // Avoids heap churn in the hot path (gather loop runs 100× per second).
+    std::vector<Brain::EvaluationTarget> allTargets;
+    std::unordered_map<uint32_t, uint8_t> entityTeams;
+    std::vector<SnapshotTask> snapshots;
+
+    // Phase 0b pre-compute buffers — persistent to avoid heap allocation per tick.
+    std::vector<bool>                                        inCombatFlags;
+    std::unordered_map<uint32_t, size_t>                    entityIdx;
+    std::unordered_map<uint32_t, std::vector<uint8_t>>      tierByObs;
 
     auto nextTick = std::chrono::steady_clock::now();
 
@@ -317,22 +330,19 @@ int main(int argc, char* argv[]) {
             });
 
         // Phase 0b — compute replication tiers per observer (P-5.4).
-        // Build global entity list once; evaluate per observer.
-        std::vector<Brain::EvaluationTarget> allTargets;
+        // Reuse persistent allTargets / entityTeams — clear instead of reallocate.
+        allTargets.clear();
         gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
             Brain::EvaluationTarget t;
             t.entityID = eid;
-            t.teamID   = 0; // resolved below per-observer; set placeholder
+            t.teamID   = 0;
             t.x        = st.x;
             t.y        = st.y;
             allTargets.push_back(t);
         });
 
-        // Map entityID → teamID for the evaluator (team is a per-client property).
-        // We build the target list with correct teamIDs derived from RemoteClient.
-        // Since ForEachEstablished iterates by EndPoint, we use GetClientTeamID.
-        // For entities not in the client map (should not happen), teamID stays 0.
-        std::unordered_map<uint32_t, uint8_t> entityTeams;
+        // Map entityID → teamID (derived from RemoteClient, resolved via EndPoint).
+        entityTeams.clear();
         manager.ForEachEstablished(
             [&](uint16_t id, const EndPoint& ep, const InputPayload* /*input*/) {
                 entityTeams[id] = manager.GetClientTeamID(ep);
@@ -342,6 +352,35 @@ int main(int argc, char* argv[]) {
             if (it != entityTeams.end()) t.teamID = it->second;
         }
 
+        // Phase 0b (cont.) — pre-compute inCombat[] ONCE, then tiers per observer.
+        // O(N²) instead of the previous O(N³) (was: Evaluate() called N times, each O(N²)).
+        //
+        // inCombatFlags[i] = true if allTargets[i] is within kCombatRadius of any enemy.
+        // entityIdx maps entityID → index in allTargets for O(1) tier lookups in gather.
+        // tierByObs maps obsID → tier[i] for each entity i in allTargets.
+        inCombatFlags = priorityEvaluator.ComputeInCombat(allTargets);
+
+        entityIdx.clear();
+        entityIdx.reserve(allTargets.size());
+        for (size_t i = 0; i < allTargets.size(); ++i)
+            entityIdx[allTargets[i].entityID] = i;
+
+        tierByObs.clear();
+        tierByObs.reserve(manager.GetEstablishedCount());
+        manager.ForEachEstablished(
+            [&](uint16_t obsID, const EndPoint& /*ep*/, const InputPayload* /*input*/) {
+                const auto* obsSt = gameWorld.GetHeroState(obsID);
+                if (!obsSt) return;
+                const auto relevance = priorityEvaluator.Evaluate(
+                    obsID, obsSt->x, obsSt->y, allTargets, inCombatFlags);
+                std::vector<uint8_t> tiers(allTargets.size(), 2u);
+                for (const auto& r : relevance) {
+                    auto it = entityIdx.find(r.entityID);
+                    if (it != entityIdx.end()) tiers[it->second] = r.tier;
+                }
+                tierByObs[obsID] = std::move(tiers);
+            });
+
         // Tier helper: should we send this entity to this observer this tick?
         auto shouldSend = [&](uint8_t tier) -> bool {
             if (tier == 0) return true;
@@ -349,43 +388,49 @@ int main(int argc, char* argv[]) {
             return (tickID % 5) == 0;  // tier 2
         };
 
-        // Gather snapshot tasks: FOW-visible + tier-filtered.
-        std::vector<SnapshotTask> snapshots;
+        // Gather snapshot tasks — one entry per client, all visible entities batched.
+        // P-5.x: one UDP packet per client per tick (batch) instead of one per entity.
+        // This reduces Phase B send() calls from O(clients × entities) to O(clients).
+        // Tier lookup is O(1): tierByObs[obsID][entityIdx[eid]].
+        // Reuse persistent snapshots vector — clear instead of reallocate.
+        snapshots.clear();
         manager.ForEachEstablished(
             [&](uint16_t obsID, const EndPoint& ep, const InputPayload* /*input*/) {
                 const uint8_t obsTeam = manager.GetClientTeamID(ep);
                 const auto* obsSt     = gameWorld.GetHeroState(obsID);
                 if (!obsSt) return;
 
-                // Evaluate tiers for this observer.
-                const auto relevance = priorityEvaluator.Evaluate(
-                    obsID, obsSt->x, obsSt->y, allTargets);
+                const auto obsIt = tierByObs.find(obsID);
+                if (obsIt == tierByObs.end()) return;
+                const std::vector<uint8_t>& tiers = obsIt->second;
 
-                // Build a quick entityID → tier lookup.
-                std::unordered_map<uint32_t, uint8_t> tierMap;
-                for (const auto& r : relevance)
-                    tierMap[r.entityID] = r.tier;
-
+                SnapshotTask task;
+                task.ep = ep;
                 gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
                     if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
-                    const uint8_t tier = tierMap.count(eid) ? tierMap.at(eid) : 2u;
+                    const auto idxIt = entityIdx.find(eid);
+                    const uint8_t tier = (idxIt != entityIdx.end()) ? tiers[idxIt->second] : 2u;
                     if (shouldSend(tier))
-                        snapshots.push_back({ep, st, {}});
+                        task.states.push_back(st);
                 });
+                if (!task.states.empty())
+                    snapshots.push_back(std::move(task));
             });
+
+        // RecordEntitySnapshotsSent is now called inside CommitAndSendBatchSnapshot
+        // so the count is always accurate regardless of code path.
 
         if (!snapshots.empty()) {
             if (parallelMode) {
-                // Phase A — parallel serialization
+                // Phase A — parallel serialization (one job per client, not per entity).
+                // The latch size is now O(clients), not O(clients × entities).
                 // sync.wait() is an unbounded barrier; we poll try_wait() against the
-                // tick deadline to detect over-budget serialization early.  We always
-                // drain fully before entering Phase B — accessing task.buffer before
-                // all jobs complete would be UB (workers still write into the vector).
+                // tick deadline to detect over-budget serialization early.
                 std::latch sync(static_cast<std::ptrdiff_t>(snapshots.size()));
 
                 for (auto& task : snapshots) {
                     jobSystem.Execute([&manager, &task, tickID, &sync]() {
-                        task.buffer = manager.SerializeSnapshotFor(task.ep, task.state, tickID);
+                        task.buffer = manager.SerializeBatchSnapshotFor(task.ep, task.states, tickID);
                         sync.count_down();
                     });
                 }
@@ -406,15 +451,15 @@ int main(int argc, char* argv[]) {
                     sync.wait();  // correctness: must drain before touching task.buffer
                 }
 
-                // Phase B — sequential commit + send
+                // Phase B — one send per client (was one send per entity before batching).
                 for (auto& task : snapshots) {
-                    manager.CommitAndSendSnapshot(task.ep, task.state, task.buffer);
+                    manager.CommitAndSendBatchSnapshot(task.ep, task.states, task.buffer);
                 }
             } else {
-                // Sequential baseline — main thread serializes and sends all snapshots.
-                // Job System stays idle (workers sleep on condvar, ~0 CPU overhead).
+                // Sequential baseline — serialize + send inline, one batch per client.
                 for (auto& task : snapshots) {
-                    manager.SendSnapshot(task.ep, task.state, tickID);
+                    task.buffer = manager.SerializeBatchSnapshotFor(task.ep, task.states, tickID);
+                    manager.CommitAndSendBatchSnapshot(task.ep, task.states, task.buffer);
                 }
             }
         }
@@ -423,9 +468,15 @@ int main(int argc, char* argv[]) {
         ++tickID;
 
         // 6. Full-loop EMA — covers all work steps 1-5 before sleep.
+        const auto tickWorkEnd = std::chrono::steady_clock::now();
         const float fullTickMs = std::chrono::duration<float, std::milli>(
-            std::chrono::steady_clock::now() - tickStart).count();
+            tickWorkEnd - tickStart).count();
         loopEmaMs = kLoopAlpha * fullTickMs + (1.0f - kLoopAlpha) * loopEmaMs;
+
+        // Record full-loop time in profiler so it appears in MaybeReport output.
+        manager.RecordFullTick(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                tickWorkEnd - tickStart).count()));
 
         nextTick += kTickInterval;
 

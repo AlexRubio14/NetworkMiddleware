@@ -213,44 +213,97 @@ TEST(SerializeDelta, AllFieldsChanged_FewerBitsThanFullSync) {
     EXPECT_LT(wDelta.GetBitCount(), wFull.GetBitCount());
 }
 
-// ─── SnapshotHistory ─────────────────────────────────────────────────────────
+// ─── SnapshotHistory — per-entity baselines (P-5.x) ─────────────────────────
+//
+// P-5.x changed from "one HeroState per seq" to "one batch per seq, per-entity
+// baseline confirmed via ProcessAckedSeq()".  The fix eliminates the multi-entity
+// delta corruption where GetBaseline(lastAckedSeq) returned the wrong entity's state.
 
-TEST(SnapshotHistory, RecordAndRetrieve) {
+TEST(SnapshotHistory, GetEntityBaseline_NullBeforeAck) {
+    // Recording a batch does NOT immediately expose the baseline.
+    // The client must ACK the seq first (ProcessAckedSeq).
     RemoteClient client;
     HeroState state = MakeBaseline();
+    client.RecordBatch(10u, {{state.networkID, state}});
 
-    client.RecordSnapshot(10u, state);
+    EXPECT_EQ(client.GetEntityBaseline(state.networkID), nullptr);
+}
 
-    const HeroState* result = client.GetBaseline(10u);
+TEST(SnapshotHistory, GetEntityBaseline_CorrectAfterAck) {
+    RemoteClient client;
+    HeroState state = MakeBaseline();
+    client.RecordBatch(10u, {{state.networkID, state}});
+    client.ProcessAckedSeq(10u);
+
+    const HeroState* result = client.GetEntityBaseline(state.networkID);
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->networkID, state.networkID);
     EXPECT_EQ(result->health,    state.health);
 }
 
-TEST(SnapshotHistory, UnknownSeq_ReturnsNullptr) {
+TEST(SnapshotHistory, UnknownEntity_ReturnsNullptr) {
+    // No batch recorded — GetEntityBaseline always returns nullptr.
     RemoteClient client;
-    EXPECT_EQ(client.GetBaseline(42u), nullptr);
+    EXPECT_EQ(client.GetEntityBaseline(42u), nullptr);
 }
 
-TEST(SnapshotHistory, StaleSeq_ReturnsNullptr) {
-    // seq=0 and seq=64 map to the same slot — storing 64 evicts 0
+TEST(SnapshotHistory, EntitiesHaveIndependentBaselines) {
+    // Bug this test guards against: previously GetBaseline(lastAckedSeq) returned
+    // whichever entity owned that seq, causing entity A's delta to be computed
+    // against entity B's state when multiple entities share a tick.
     RemoteClient client;
-    HeroState state = MakeBaseline();
+    HeroState stateA = MakeBaseline();
+    stateA.networkID = 1; stateA.x = 100.0f; stateA.health = 200.0f;
 
-    client.RecordSnapshot(0u, state);
-    ASSERT_NE(client.GetBaseline(0u), nullptr); // present
+    HeroState stateB = MakeBaseline();
+    stateB.networkID = 2; stateB.x = 300.0f; stateB.health = 400.0f;
 
-    client.RecordSnapshot(64u, state);          // overwrites slot 0
-    EXPECT_EQ(client.GetBaseline(0u), nullptr); // evicted
-    EXPECT_NE(client.GetBaseline(64u), nullptr);
+    // Both entities recorded in the same batch (same seq — one packet per client).
+    client.RecordBatch(7u, {{stateA.networkID, stateA}, {stateB.networkID, stateB}});
+    client.ProcessAckedSeq(7u);
+
+    const HeroState* baseA = client.GetEntityBaseline(stateA.networkID);
+    const HeroState* baseB = client.GetEntityBaseline(stateB.networkID);
+
+    ASSERT_NE(baseA, nullptr);
+    ASSERT_NE(baseB, nullptr);
+    EXPECT_FLOAT_EQ(baseA->x,      stateA.x);      // entity A has its OWN baseline
+    EXPECT_FLOAT_EQ(baseA->health, stateA.health);
+    EXPECT_FLOAT_EQ(baseB->x,      stateB.x);      // entity B has its OWN baseline
+    EXPECT_FLOAT_EQ(baseB->health, stateB.health);
+}
+
+TEST(SnapshotHistory, EvictedSeq_DoesNotUpdateBaseline) {
+    // seq=0 and seq=64 map to the same history slot (0 % 64 == 64 % 64 == 0).
+    // After seq=64 overwrites the slot, ProcessAckedSeq(0) must be a no-op.
+    RemoteClient client;
+    HeroState stateOld = MakeBaseline();
+    stateOld.networkID = 5; stateOld.health = 100.0f;
+
+    HeroState stateNew = MakeBaseline();
+    stateNew.networkID = 5; stateNew.health = 999.0f;  // different value
+
+    client.RecordBatch(0u,  {{stateOld.networkID, stateOld}});
+    client.RecordBatch(64u, {{stateNew.networkID, stateNew}});  // evicts slot 0
+
+    // ACK seq=64: baseline becomes stateNew.
+    client.ProcessAckedSeq(64u);
+    const HeroState* after64 = client.GetEntityBaseline(5u);
+    ASSERT_NE(after64, nullptr);
+    EXPECT_FLOAT_EQ(after64->health, stateNew.health);
+
+    // ACK seq=0 now: slot holds seq=64, so the guard (entry.seq != seq) fires → no-op.
+    client.ProcessAckedSeq(0u);
+    const HeroState* afterStale = client.GetEntityBaseline(5u);
+    ASSERT_NE(afterStale, nullptr);
+    EXPECT_FLOAT_EQ(afterStale->health, stateNew.health);  // unchanged — still stateNew
 }
 
 TEST(SnapshotHistory, NullptrBaseline_ImpliesFullSync) {
-    // Caller contract: GetBaseline returning nullptr means force full sync.
-    // This test documents the contract rather than testing implementation.
+    // Contract: GetEntityBaseline returning nullptr means force full sync.
     RemoteClient client;
-    EXPECT_EQ(client.GetBaseline(999u), nullptr);
-    // Caller would detect nullptr and call HeroSerializer::Serialize (full sync)
+    EXPECT_EQ(client.GetEntityBaseline(999u), nullptr);
+    // Caller detects nullptr and calls HeroSerializer::Serialize (full sync).
 }
 
 // ─── 16-bit precision: 2cm movement detection ────────────────────────────────

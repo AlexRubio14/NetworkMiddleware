@@ -58,10 +58,13 @@ TEST(NetworkProfiler, RecordTick_NoTicks_AvgIsZero) {
 //
 // Asserts the constant independently of any other test that uses it.
 // A bad change to the constant would keep DeltaEfficiency tests green but fail here,
-// catching protocol-size regressions. Value: 149 bits / 8 = 18.625 → ceiling = 19 bytes payload
-// + 4 bytes CRC32 trailer (P-4.5) = 23 bytes total on the wire.
-TEST(NetworkProfiler, kFullSyncBytesPerClient_Is23) {
-    EXPECT_EQ(NetworkProfiler::kFullSyncBytesPerClient, 23u);
+// catching protocol-size regressions.
+// Value: 104-bit PacketHeader (13 bytes) + 149-bit payload (19 bytes ceil)
+//        + 4 bytes CRC32 trailer = 36 bytes total per entity-snapshot wire packet.
+// Using only payload+CRC (23) caused actual > theoretical because RecordBytesSent
+// accounts for headers too, clamping Delta Efficiency to 0%.
+TEST(NetworkProfiler, kFullSyncBytesPerClient_Is36) {
+    EXPECT_EQ(NetworkProfiler::kFullSyncBytesPerClient, 36u);
 }
 
 // ─── DeltaEfficiency ─────────────────────────────────────────────────────────
@@ -78,7 +81,9 @@ TEST(NetworkProfiler, DeltaEfficiency_NoData_IsZero) {
 TEST(NetworkProfiler, DeltaEfficiency_FullSyncGivesZeroEfficiency) {
     NetworkProfiler p;
     constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
-    p.RecordBytesSent(kFull);  // 1 client × 19 bytes = 19 bytes/tick
+    // 1 entity-snapshot dispatched, sending kFull snapshot bytes → ratio = 1.0 → efficiency = 0.
+    p.RecordEntitySnapshotsSent(1);
+    p.RecordSnapshotBytesSent(kFull);  // snapshot-only bytes used for efficiency
     p.RecordTick(1000);
     const auto s = p.GetSnapshot(1);
     EXPECT_NEAR(s.deltaEfficiency, 0.0f, 0.001f);
@@ -89,12 +94,30 @@ TEST(NetworkProfiler, DeltaEfficiency_FullSyncGivesZeroEfficiency) {
 TEST(NetworkProfiler, DeltaEfficiency_HalfSentGivesFiftyPercent) {
     NetworkProfiler p;
     constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
-    // 2 clients → theoretical = 38 bytes/tick.
-    // We send only 19 bytes → efficiency = 1 - (19/38) = 0.5
-    p.RecordBytesSent(kFull);
+    // 2 entity-snapshots dispatched, theoretical = 2×kFull bytes/tick.
+    // We send only kFull snapshot bytes → efficiency = 1 - (kFull / (2×kFull)) = 0.5
+    p.RecordEntitySnapshotsSent(2);
+    p.RecordSnapshotBytesSent(kFull);  // snapshot-only bytes used for efficiency
     p.RecordTick(1000);
     const auto s = p.GetSnapshot(2);
     EXPECT_NEAR(s.deltaEfficiency, 0.5f, 0.001f);
+}
+
+// Non-snapshot control traffic (heartbeats, ACKs) must NOT affect Delta Efficiency.
+// Efficiency is computed from snapshot bytes only — RecordBytesSent (all traffic)
+// does not influence the efficiency numerator.
+TEST(NetworkProfiler, DeltaEfficiency_NonSnapshotBytesNotCounted) {
+    NetworkProfiler p;
+    constexpr uint32_t kFull = NetworkProfiler::kFullSyncBytesPerClient;
+    // 1 entity-snapshot, sending kFull snapshot bytes → 0% efficiency baseline.
+    p.RecordEntitySnapshotsSent(1);
+    p.RecordSnapshotBytesSent(kFull);
+    // Add large non-snapshot overhead (e.g. heartbeats, handshake) via RecordBytesSent.
+    p.RecordBytesSent(kFull * 10);
+    p.RecordTick(1000);
+    const auto s = p.GetSnapshot(1);
+    // Efficiency must still be ~0% (snapshot bytes == theoretical), not negative.
+    EXPECT_NEAR(s.deltaEfficiency, 0.0f, 0.001f);
 }
 
 // ─── P-4.4: EMA reactive tick time ───────────────────────────────────────────
