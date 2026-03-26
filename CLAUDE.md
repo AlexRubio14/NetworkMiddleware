@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — a C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux, validated via a Visual Debugger (Unreal Engine ActorComponent plugin). Not a game itself. Goal: outperform commercial middlewares (Photon Bolt, Mirror, UE Replication) in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–5.4 complete (2026-03-25). P-5.3 adds Server-Side Lag Compensation: InputPayload extended to 40 bits (+ clientTickID:16), GameWorld::RecordTick/GetStateAtTick circular rewind buffer (32 slots / 320ms), HitValidator::CheckHit geometry helper. P-5.4 adds Network LOD: Brain::PriorityEvaluator assigns Tier 0/1/2 per (observer, entity) pair using interest=(1+4×inCombat)/distance; inCombat by proximity (kCombatRadius=200u); Tier 0=100Hz, Tier 1=50Hz, Tier 2=20Hz; Phase 0b in main loop before gather. 223/223 tests passing.
+**Current status:** Phases 1–5.4 complete + P-5.x regression fixes (2026-03-25). Fixed two bugs found in P-5.x regression benchmark: (1) multi-entity delta baseline corruption — RemoteClient now uses per-entity baseline via RecordBatch/ProcessAckedSeq/GetEntityBaseline instead of GetBaseline(lastAckedSeq); (2) O(clients×entities) UDP sends — snapshot pipeline batches all visible entities per client into one packet, reducing Phase B sends from 2116 to 46 in Zerg scenario. Wire format updated: [tickID:32][count:8][entity_0...][entity_N-1...]. 230/230 tests passing.
 
 **Validated benchmark results (P-4.3, WSL2, Release):**
 - Tick budget: **1.1%** (0.11ms / 10ms) with 47 clients under degraded network (100ms / 2% loss)
 - Delta Efficiency: **99%** — the middleware sends 1% of what a full-sync system would
-- NOTE: These numbers will change now that Snapshot packets are sent each tick (expect Out ~20-40 kbps, Delta Efficiency ~60-80% under real game load)
-- 223/223 tests passing (Windows/MSVC)
+- NOTE: P-5.x regression fixes pending re-benchmark. Expected: Full Loop ~2-4ms in Zerg, Delta Efficiency ~60-80% in clean scenarios.
+- 230/230 tests passing (Windows/MSVC)
 
 ## Build Commands
 
@@ -91,6 +91,7 @@ P-5.1  Spatial Hashing & FOW — 20×20 SpatialGrid (50 u/cell), std::bitset<400
 P-5.2  Silent Kalman Prediction — Brain::KalmanPredictor, 4-state CV model [x,y,vx,vy], F/H/Q/R matrices, predict+update cycle in main.cpp step 2; synthesizes InputPayload on missing input ticks; no wire-format change; PredictedInput type keeps Brain dep-free from Shared; Q_vel=5.0 for MOBA direction-change responsiveness
 P-5.3  Server-Side Lag Compensation — InputPayload extended 24→40 bits (clientTickID:16); GameWorld::RecordTick/GetStateAtTick per-entity circular rewind buffer (kRewindSlots=32, 320ms window); HitValidator::CheckHit header-only geometry; main.cpp rewinds target to clientTickID (clamped to kMaxRewindTicks=20) on ability input and logs hit validation
 P-5.4  Network LOD / AI Replication — Brain::PriorityEvaluator assigns Tier 0/1/2 per (observer, entity); interest=(kBaseWeight+kCombatBonus×inCombat)/dist, inCombat=proximity proxy (kCombatRadius=200u); Tier 0=100Hz, Tier 1=50Hz (even ticks), Tier 2=20Hz (every 5th); Phase 0b in main loop computes tiers before gather; FOW filter applied first; no Phase A/B changes
+P-5.x  Regression fixes — (1) Per-entity delta baselines: RemoteClient::BatchEntry replaces SnapshotEntry; ProcessAckedSeq(seq)+ack_bits window promotes confirmed batches into m_entityBaselines; GetEntityBaseline(entityID) used in SerializeSnapshot; fixes 0-15% efficiency regression. (2) Batch snapshot packets: SerializeBatchSnapshotFor/CommitAndSendBatchSnapshot reduce Phase B from O(clients×entities) to O(clients) UDP sends; wire format [tickID:32][count:8][entities...]; fixes 39.5ms→~2ms full loop in Zerg.
 ```
 
 ## Key Interfaces

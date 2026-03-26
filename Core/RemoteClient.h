@@ -7,6 +7,7 @@
 #include <chrono>
 #include <map>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace NetworkMiddleware::Core {
@@ -99,23 +100,37 @@ namespace NetworkMiddleware::Core {
         bool                                      m_lastProcessedSeqInitialized = false;
 
         // --- P-3.5 Snapshot History (Delta Compression baseline) ---
+        //
+        // P-5.x: history is keyed per-batch.  One tick = one batch packet per client,
+        // containing N entity states.  ProcessAckedSeq() promotes a confirmed batch
+        // into m_entityBaselines so SerializeSnapshot can delta-compress each entity
+        // against the last state the client has actually received, not the last entity
+        // that happened to share a sequence number.
 
-        static constexpr size_t kHistorySize = 64; // ~1 second at 60 Hz
+        static constexpr size_t kHistorySize = 64; // ~640ms at 100 Hz
 
-        struct SnapshotEntry {
-            uint16_t            seq   = 0;
-            bool                valid = false;
-            Shared::Data::HeroState state;
+        struct BatchEntry {
+            uint16_t seq   = 0;
+            bool     valid = false;
+            std::vector<std::pair<uint32_t, Shared::Data::HeroState>> entities;
         };
 
-        std::array<SnapshotEntry, kHistorySize> m_history{};
+        std::array<BatchEntry, kHistorySize> m_history{};
 
-        // Records a sent snapshot so it can later serve as a delta baseline.
-        void RecordSnapshot(uint16_t seq, const Shared::Data::HeroState& state);
+        // Per-entity last-confirmed state (updated when client ACKs the seq).
+        std::unordered_map<uint32_t, Shared::Data::HeroState> m_entityBaselines;
 
-        // Returns the stored state for seq, or nullptr if it has been evicted.
-        // nullptr → caller must fall back to a full sync.
-        const Shared::Data::HeroState* GetBaseline(uint16_t seq) const;
+        // Records all entity states sent in a single batch packet (seq = localSequence).
+        void RecordBatch(uint16_t seq,
+                         const std::vector<std::pair<uint32_t, Shared::Data::HeroState>>& entities);
+
+        // Called when the client's ACK confirms seq was received.
+        // Promotes every entity in that batch into m_entityBaselines.
+        void ProcessAckedSeq(uint16_t seq);
+
+        // Returns the last confirmed state for entityID, or nullptr if not yet ACKed.
+        // nullptr → caller must fall back to a full sync (Serialize).
+        const Shared::Data::HeroState* GetEntityBaseline(uint32_t entityID) const;
 
         // --- P-3.6 Session Recovery ---
 
@@ -150,10 +165,8 @@ namespace NetworkMiddleware::Core {
         // by ForEachEstablished() during the game loop's input phase.
         std::optional<Shared::InputPayload> pendingInput;
 
-        // Last server sequence number confirmed by the client (from header.ack of incoming packets).
-        // Used by SendSnapshot() to find the correct delta baseline in m_history.
-        uint16_t m_lastClientAckedServerSeq      = 0;
-        bool     m_lastClientAckedServerSeqValid  = false;
+        // (Removed in P-5.x: delta baseline selection now uses per-entity m_entityBaselines
+        //  updated via ProcessAckedSeq(), not a single global last-acked-seq.)
     };
 
 }

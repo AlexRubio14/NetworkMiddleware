@@ -91,10 +91,18 @@ namespace NetworkMiddleware::Core {
         void SendConnectionAccepted(const Shared::EndPoint& to, uint16_t networkID, uint64_t token);
 
         // P-4.4 Split-Phase internal helper — const, no side effects.
-        // Builds the wire payload for a snapshot without touching RemoteClient state.
+        // Builds the wire payload for a single-entity snapshot.
         std::vector<uint8_t> SerializeSnapshot(const RemoteClient& client,
                                                const Shared::Data::HeroState& state,
                                                uint32_t tickID) const;
+
+        // P-5.x Batch snapshot serialization (private, const).
+        // Builds a multi-entity wire payload for one client.
+        // Wire format: [tickID:32][count:8][entity_0...][entity_N-1...]
+        std::vector<uint8_t> SerializeBatchSnapshot(
+            const RemoteClient& client,
+            const std::vector<Shared::Data::HeroState>& states,
+            uint32_t tickID) const;
 
         // P-4.5 Packet Integrity — single chokepoint for all outgoing sends.
         // Appends a 4-byte CRC32 trailer, calls m_transport->Send(), and records bytes sent.
@@ -175,6 +183,22 @@ namespace NetworkMiddleware::Core {
         void CommitAndSendSnapshot(const Shared::EndPoint& to,
                                    const Shared::Data::HeroState& state,
                                    const std::vector<uint8_t>& payload);
+
+        // P-5.x Batch Split-Phase API.
+        //
+        // Phase A (parallel-safe): serializes all entity states for one client into
+        // a single wire buffer.  Read-only; safe to call from worker threads.
+        std::vector<uint8_t> SerializeBatchSnapshotFor(
+            const Shared::EndPoint& to,
+            const std::vector<Shared::Data::HeroState>& states,
+            uint32_t tickID) const;
+
+        // Phase B (main-thread only): records the batch in history, sends the
+        // pre-built payload, and updates profiler counters.
+        void CommitAndSendBatchSnapshot(
+            const Shared::EndPoint& to,
+            const std::vector<Shared::Data::HeroState>& states,
+            const std::vector<uint8_t>& payload);
 
         // Returns the team ID of the established client at ep (0 or 1).
         // Returns 0 if the endpoint is not found (safe default for callers).
