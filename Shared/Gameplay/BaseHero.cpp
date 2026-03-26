@@ -2,6 +2,17 @@
 
 namespace NetworkMiddleware::Shared::Gameplay {
 
+    uint32_t BaseHero::GetDirtyMask()  const { return m_state.dirtyMask; }
+    void     BaseHero::ClearDirtyMask()      { m_state.dirtyMask = 0; }
+    uint32_t BaseHero::GetNetworkID()  const { return m_state.networkID; }
+    float    BaseHero::GetX()          const { return m_state.x; }
+    float    BaseHero::GetY()          const { return m_state.y; }
+    uint32_t BaseHero::GetLevel()      const { return m_state.level; }
+    float    BaseHero::GetExperience() const { return m_state.experience; }
+    bool     BaseHero::IsDead()        const { return m_state.health <= 0; }
+    uint16_t BaseHero::GetHeroTypeID() const { return m_state.heroTypeID; }
+    const Data::HeroState& BaseHero::GetState() const { return m_state; }
+
     BaseHero::BaseHero(uint32_t netID, uint16_t typeID) {
         m_state.networkID = netID;
         m_state.heroTypeID = typeID;

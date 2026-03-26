@@ -1,13 +1,19 @@
 #pragma once
 #include "../Shared/Data/HeroState.h"
 #include "../Shared/Network/InputPackets.h"
-#include "../Shared/Gameplay/ViegoEntity.h"
+#include "../Shared/Gameplay/BaseHero.h"
 #include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
 
 namespace NetworkMiddleware::Core {
+
+    // Factory signature: given a networkID, returns a heap-allocated hero.
+    // Inject at construction to keep Core independent of concrete hero types.
+    // The default (nullptr) creates a ViegoEntity — see GameWorld.cpp.
+    using HeroFactory = std::function<
+        std::unique_ptr<Shared::Gameplay::BaseHero>(uint32_t networkID)>;
 
     // Authoritative simulation container for P-3.7 Minimal Game Loop.
     //
@@ -32,6 +38,11 @@ namespace NetworkMiddleware::Core {
 
     class GameWorld {
     public:
+        // Pass a custom factory to substitute a different hero type (e.g. in tests).
+        // Defaults to creating ViegoEntity (defined in GameWorld.cpp so Core headers
+        // never include ViegoEntity.h directly).
+        explicit GameWorld(HeroFactory factory = {});
+
         static constexpr float  kMoveSpeed     = 100.0f;  // units per second
         static constexpr float  kMapBound       = 500.0f;  // ±X and ±Y limit
         static constexpr float  kSpeedTolerance = 5.0f;   // max displacement per tick (units) — ApplyInput rejects any step that exceeds this
@@ -76,7 +87,8 @@ namespace NetworkMiddleware::Core {
         const RewindEntry* GetStateAtTick(uint32_t entityID, uint32_t tickID) const;
 
     private:
-        std::unordered_map<uint32_t, std::unique_ptr<Shared::Gameplay::ViegoEntity>> m_heroes;
+        HeroFactory m_heroFactory;
+        std::unordered_map<uint32_t, std::unique_ptr<Shared::Gameplay::BaseHero>> m_heroes;
 
         // P-5.3: per-entity circular buffer indexed by tickID % kRewindSlots.
         std::unordered_map<uint32_t, std::array<RewindEntry, kRewindSlots>> m_rewindHistory;

@@ -31,9 +31,9 @@ namespace NetworkMiddleware::Shared::Gameplay {
         ~BaseHero() override = default;
 
         // --- INetworkable Implementation ---
-        uint32_t GetDirtyMask() const override { return m_state.dirtyMask; }
-        void ClearDirtyMask() override { m_state.dirtyMask = 0; }
-        uint32_t GetNetworkID() const override { return m_state.networkID; }
+        uint32_t GetDirtyMask() const override;
+        void ClearDirtyMask() override;
+        uint32_t GetNetworkID() const override;
 
         // These will be implemented by the Serializer later
         void Serialize(BitWriter& writer) const override = 0;
@@ -48,18 +48,18 @@ namespace NetworkMiddleware::Shared::Gameplay {
         void AddExperience(float amount) override;
         void LevelUp() override;
 
-        float GetX() const override { return m_state.x; }
-        float GetY() const override { return m_state.y; }
-        uint32_t GetLevel() const override { return m_state.level; }
-        float GetExperience() const override { return m_state.experience; }
-        bool IsDead() const override { return m_state.health <= 0; }
+        float GetX() const override;
+        float GetY() const override;
+        uint32_t GetLevel() const override;
+        float GetExperience() const override;
+        bool IsDead() const override;
         bool IsStunned() const override;
 
         // Identity
         std::string GetHeroName() const override = 0;
-        uint16_t GetHeroTypeID() const override { return m_state.heroTypeID; }
+        uint16_t GetHeroTypeID() const override;
 
         // Direct state access for GameWorld (read-only, P-3.7)
-        const Data::HeroState& GetState() const { return m_state; }
+        const Data::HeroState& GetState() const;
     };
 }

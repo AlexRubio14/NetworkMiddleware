@@ -69,6 +69,14 @@ namespace NetworkMiddleware::Brain {
             float                                observerX,
             float                                observerY,
             const std::vector<EvaluationTarget>& allEntities) const;
+
+        // ShouldSend — decides whether an entity at the given tier should be sent
+        // on tickID.  This is the single authoritative cadence rule used by both
+        // the game loop and the cadence unit tests.
+        //   Tier 0: every tick
+        //   Tier 1: even ticks  (tickID % 2 == 0)
+        //   Tier 2: every 5th tick (tickID % 5 == 0)
+        static bool ShouldSend(uint8_t tier, uint32_t tickID);
     };
 
 }  // namespace NetworkMiddleware::Brain

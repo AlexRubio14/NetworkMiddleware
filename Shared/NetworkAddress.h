@@ -16,13 +16,8 @@ namespace NetworkMiddleware::Shared {
             return port < other.port;
         }
 
-        // Cross-platform: manual byte extraction (network byte order, no arpa/inet.h needed).
-        std::string ToString() const {
-            return std::to_string( address        & 0xFF) + "." +
-                   std::to_string((address >>  8) & 0xFF) + "." +
-                   std::to_string((address >> 16) & 0xFF) + "." +
-                   std::to_string((address >> 24) & 0xFF) + ":" +
-                   std::to_string(port);
-        }
+        // Returns "A.B.C.D:port". Bytes are extracted LSB-first from the host-byte-order
+        // uint32_t stored in `address` — cross-platform, no arpa/inet.h needed.
+        std::string ToString() const;
     };
 }
