@@ -33,7 +33,7 @@ static std::vector<uint8_t> StripCRC(const std::vector<uint8_t>& data) {
 
 static std::vector<uint8_t> MakeHeaderOnlyPacket(PacketType type, uint16_t seq = 0) {
     BitWriter w;
-    PacketHeader h;
+    PacketHeader h{};
     h.sequence = seq;
     h.type     = static_cast<uint8_t>(type);
     h.Write(w);
@@ -42,7 +42,7 @@ static std::vector<uint8_t> MakeHeaderOnlyPacket(PacketType type, uint16_t seq =
 
 static std::vector<uint8_t> MakeChallengeResponsePacket(uint64_t salt, uint16_t seq = 0) {
     BitWriter w;
-    PacketHeader h;
+    PacketHeader h{};
     h.sequence = seq;
     h.type     = static_cast<uint8_t>(PacketType::ChallengeResponse);
     h.Write(w);
@@ -59,7 +59,7 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     // Step 1 — ConnectionRequest
     t.InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep);
     nm.Update();
-    EXPECT_GE(t.sentPackets.size(), 1u);
+    ASSERT_GE(t.sentPackets.size(), 1u);
 
     // Step 2 — Read challenge salt (strip CRC trailer before parsing)
     const auto challengeStripped = StripCRC(t.sentPackets.back().first);
@@ -71,7 +71,7 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     // Step 3 — ChallengeResponse
     t.InjectPacket(MakeChallengeResponsePacket(challenge.salt), ep);
     nm.Update();
-    EXPECT_GE(t.sentPackets.size(), 1u);
+    ASSERT_GE(t.sentPackets.size(), 1u);
 
     // Step 4 — Read NetworkID (strip CRC trailer before parsing)
     const auto acceptStripped = StripCRC(t.sentPackets.back().first);

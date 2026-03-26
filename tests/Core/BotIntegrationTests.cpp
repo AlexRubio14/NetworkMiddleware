@@ -27,12 +27,16 @@ static const EndPoint kBotEp   {0x0200007F, 9000};
 //   Server → Bot:  inject into botT   with sender = kServerEp
 
 static void Route(MockTransport& serverT, MockTransport& botT) {
-    for (auto& [data, to] : botT.sentPackets)
+    for (auto& [data, to] : botT.sentPackets) {
+        ASSERT_EQ(to, kServerEp) << "Bot sent a packet to the wrong endpoint";
         serverT.InjectPacket(data, kBotEp);
+    }
     botT.sentPackets.clear();
 
-    for (auto& [data, to] : serverT.sentPackets)
+    for (auto& [data, to] : serverT.sentPackets) {
+        ASSERT_EQ(to, kBotEp) << "Server sent a packet to the wrong endpoint";
         botT.InjectPacket(data, kServerEp);
+    }
     serverT.sentPackets.clear();
 }
 

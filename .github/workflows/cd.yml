@@ -85,7 +85,7 @@ jobs:
         run: |
           cat > NetServer.desktop <<'EOF'
           [Desktop Entry]
-          Name=NetworkMiddleware Server
+          Name=NetServer
           Exec=NetServer
           Icon=NetServer
           Type=Application

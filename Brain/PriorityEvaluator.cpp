@@ -75,4 +75,10 @@ std::vector<EntityRelevance> PriorityEvaluator::Evaluate(
                     ComputeInCombat(allEntities));
 }
 
+bool PriorityEvaluator::ShouldSend(uint8_t tier, uint32_t tickID) {
+    if (tier == 0) return true;
+    if (tier == 1) return (tickID % 2) == 0;
+    return (tickID % 5) == 0;
+}
+
 }  // namespace NetworkMiddleware::Brain

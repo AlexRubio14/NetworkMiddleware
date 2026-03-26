@@ -133,7 +133,7 @@ No changes to `NetworkManager`, `RemoteClient`, `GameWorld`, or any Shared/Trans
 
 ## Test results
 
-```
+```text
 [==========] 209 tests from 19 test suites ran.
 [  PASSED  ] 209 tests.
 ```

@@ -34,28 +34,33 @@ try {
     exit 1
 }
 
-# ── Install ─────────────────────────────────────────────────────────────────
+# ── Install (extract to staging dir, validate, then atomic replace) ─────────
+$stagingDir = "$installDir.new"
 Write-Host "Installing to $installDir..."
 try {
-    if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $installDir | Out-Null
-    Expand-Archive $zipPath -DestinationPath $installDir -Force
+    if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $stagingDir | Out-Null
+    Expand-Archive $zipPath -DestinationPath $stagingDir -Force
 } catch {
-    # Leave no broken state
-    if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+    if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
     Write-Error "Extraction failed: $_"
     exit 1
 } finally {
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 }
 
-# ── Validate ────────────────────────────────────────────────────────────────
-$exe = "$installDir\NetServer.exe"
+# ── Validate staging dir before touching the live install ───────────────────
+$exe = "$stagingDir\NetServer.exe"
 if (-not (Test-Path $exe)) {
-    Remove-Item $installDir -Recurse -Force
+    Remove-Item $stagingDir -Recurse -Force
     Write-Error "NetServer.exe not found after extraction. The release package may be corrupted."
     exit 1
 }
+
+# ── Atomic swap: only remove old install once new one is verified ────────────
+if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+Rename-Item $stagingDir $installDir
+$exe = "$installDir\NetServer.exe"
 
 # ── Desktop shortcut ────────────────────────────────────────────────────────
 $shell                     = New-Object -ComObject WScript.Shell

@@ -1,4 +1,5 @@
 ﻿#include "BitReader.h"
+#include <algorithm>
 
 namespace NetworkMiddleware::Shared
 {
@@ -12,11 +13,18 @@ namespace NetworkMiddleware::Shared
 
         while (numBits > 0)
         {
+            // Stop at m_totalBits to avoid consuming tail-padding zeros written by
+            // BitWriter::GetCompressedData() when the payload is not byte-aligned.
+            if (m_bitHead >= m_totalBits)
+                return value;
+
             size_t byteIndex = m_bitHead >> 3;
             size_t bitOffset = m_bitHead & 7;
 
             uint32_t bitsAvailableInByte = 8 - (uint32_t)bitOffset;
-            uint32_t bitsToRead = (numBits < bitsAvailableInByte) ? numBits : bitsAvailableInByte;
+            // Also limit bitsToRead so we never step past m_totalBits.
+            const uint32_t bitsRemaining = static_cast<uint32_t>(m_totalBits - m_bitHead);
+            uint32_t bitsToRead = std::min({numBits, bitsAvailableInByte, bitsRemaining});
 
             // Create mask and extract bits from current byte
             if (byteIndex >= m_buffer.size())

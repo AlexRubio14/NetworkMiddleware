@@ -1,14 +1,22 @@
 #include "GameWorld.h"
+#include "../Shared/Gameplay/ViegoEntity.h"
 #include <algorithm>
 #include <cmath>
 
 namespace NetworkMiddleware::Core {
 
+    GameWorld::GameWorld(HeroFactory factory)
+        : m_heroFactory(factory
+              ? std::move(factory)
+              : [](uint32_t id) -> std::unique_ptr<Shared::Gameplay::BaseHero> {
+                    return std::make_unique<Shared::Gameplay::ViegoEntity>(id);
+                })
+    {}
+
     void GameWorld::AddHero(uint32_t networkID) {
         if (m_heroes.contains(networkID))
             return;
-        m_heroes.emplace(networkID,
-            std::make_unique<Shared::Gameplay::ViegoEntity>(networkID));
+        m_heroes.emplace(networkID, m_heroFactory(networkID));
         m_rewindHistory.emplace(networkID, std::array<RewindEntry, kRewindSlots>{});
     }
 

@@ -97,21 +97,14 @@ TEST(PriorityEvaluator, Tier1Range) {
 }
 
 TEST(PriorityEvaluator, ShouldSend_Tier0_EveryTick) {
-    // Tier 0 sends every tick regardless of tickID.
     for (uint32_t t = 0; t < 10; ++t) {
-        const bool shouldSend = (0 == 0) || true;  // tier 0 always
-        (void)shouldSend;
-        // Encode the logic directly for the test.
-        const uint8_t tier = 0;
-        const bool send = (tier == 0) || (tier == 1 && t % 2 == 0) || (tier == 2 && t % 5 == 0);
-        EXPECT_TRUE(send) << "Tier 0 must send at tick " << t;
+        EXPECT_TRUE(PriorityEvaluator::ShouldSend(0, t)) << "Tier 0 must send at tick " << t;
     }
 }
 
 TEST(PriorityEvaluator, ShouldSend_Tier1_EvenTicks) {
     for (uint32_t t = 0; t < 10; ++t) {
-        const uint8_t tier = 1;
-        const bool send = (tier == 0) || (tier == 1 && t % 2 == 0) || (tier == 2 && t % 5 == 0);
+        const bool send = PriorityEvaluator::ShouldSend(1, t);
         if (t % 2 == 0) EXPECT_TRUE(send)  << "Tier 1 should send at even tick " << t;
         else             EXPECT_FALSE(send) << "Tier 1 should NOT send at odd tick " << t;
     }
@@ -155,8 +148,7 @@ TEST(PriorityEvaluator, Evaluate_WithPrecomputedFlags_MatchesBuiltin) {
 
 TEST(PriorityEvaluator, ShouldSend_Tier2_Every5th) {
     for (uint32_t t = 0; t < 15; ++t) {
-        const uint8_t tier = 2;
-        const bool send = (tier == 0) || (tier == 1 && t % 2 == 0) || (tier == 2 && t % 5 == 0);
+        const bool send = PriorityEvaluator::ShouldSend(2, t);
         if (t % 5 == 0) EXPECT_TRUE(send)  << "Tier 2 should send at tick " << t;
         else             EXPECT_FALSE(send) << "Tier 2 should NOT send at tick " << t;
     }

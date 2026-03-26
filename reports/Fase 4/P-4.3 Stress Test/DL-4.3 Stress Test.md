@@ -53,7 +53,7 @@ void RecordBytesSent(size_t bytes) noexcept {
 
 `MaybeReport` calcula la eficiencia de delta comparando bytes enviados reales vs el teórico de full sync:
 
-```
+```text
 DeltaEfficiency = max(0, 1 - (avgBytesSentPerTick / kFullSyncBytesPerClient))
 ```
 
