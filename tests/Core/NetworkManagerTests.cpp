@@ -59,7 +59,8 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     // Step 1 — ConnectionRequest
     t.InjectPacket(MakeHeaderOnlyPacket(PacketType::ConnectionRequest), ep);
     nm.Update();
-    ASSERT_GE(t.sentPackets.size(), 1u);
+    EXPECT_GE(t.sentPackets.size(), 1u);
+    if (t.sentPackets.empty()) return 0;  // abort: no challenge sent
 
     // Step 2 — Read challenge salt (strip CRC trailer before parsing)
     const auto challengeStripped = StripCRC(t.sentPackets.back().first);
@@ -71,7 +72,8 @@ static uint16_t CompleteHandshake(MockTransport& t, NetworkManager& nm, const En
     // Step 3 — ChallengeResponse
     t.InjectPacket(MakeChallengeResponsePacket(challenge.salt), ep);
     nm.Update();
-    ASSERT_GE(t.sentPackets.size(), 1u);
+    EXPECT_GE(t.sentPackets.size(), 1u);
+    if (t.sentPackets.empty()) return 0;  // abort: no accepted packet sent
 
     // Step 4 — Read NetworkID (strip CRC trailer before parsing)
     const auto acceptStripped = StripCRC(t.sentPackets.back().first);
