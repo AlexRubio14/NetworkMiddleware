@@ -22,10 +22,9 @@ RUN cmake -B /build \
 FROM ubuntu:24.04 AS server
 
 # Only the SFML network + system shared libraries are needed at runtime.
-# Ubuntu 24.04 uses the t64 suffix for the time_t 64-bit ABI transition.
 RUN apt-get update && apt-get install -y \
-        libsfml-network2.6t64 \
-        libsfml-system2.6t64 \
+        libsfml-network2.6 \
+        libsfml-system2.6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/Server/NetServer /usr/local/bin/NetServer
@@ -38,8 +37,8 @@ CMD ["NetServer"]
 FROM ubuntu:24.04 AS bot
 
 RUN apt-get update && apt-get install -y \
-        libsfml-network2.6t64 \
-        libsfml-system2.6t64 \
+        libsfml-network2.6 \
+        libsfml-system2.6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/HeadlessBot/HeadlessBot /usr/local/bin/HeadlessBot
