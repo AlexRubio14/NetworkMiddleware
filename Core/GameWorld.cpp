@@ -36,6 +36,14 @@ namespace NetworkMiddleware::Core {
         const float newY = std::clamp(hero.GetY() + dy * kMoveSpeed * dt,
                                       -kMapBound, kMapBound);
 
+        // Speed-hack gate: reject if displacement exceeds kSpeedTolerance per tick.
+        // Catches misconfigured dt (dt >> kTickDt) and future movement-ability bugs.
+        // Normal 100 Hz: max ≈ 1.41 units (diagonal) — well within the 5-unit limit.
+        const float moveDx = newX - hero.GetX();
+        const float moveDy = newY - hero.GetY();
+        if (moveDx * moveDx + moveDy * moveDy > kSpeedTolerance * kSpeedTolerance)
+            return;  // Silent reject
+
         hero.SetPosition(newX, newY);
     }
 
