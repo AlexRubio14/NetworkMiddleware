@@ -1,35 +1,66 @@
 # NetworkMiddleware Server — Windows installer
 # Usage: irm https://raw.githubusercontent.com/AlexRubio14/NetworkMiddleware/main/install.ps1 | iex
 
-$repo     = "AlexRubio14/NetworkMiddleware"
+$ErrorActionPreference = 'Stop'
+
+$repo       = "AlexRubio14/NetworkMiddleware"
 $installDir = "$env:LOCALAPPDATA\NetworkMiddleware"
 $desktop    = [Environment]::GetFolderPath("Desktop")
+$zipPath    = "$env:TEMP\NetServer-windows-x64.zip"
 
 Write-Host "NetworkMiddleware Server — installer" -ForegroundColor Cyan
+
+# ── Fetch latest release ────────────────────────────────────────────────────
 Write-Host "Fetching latest release..."
-
-$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
-$asset   = $release.assets | Where-Object { $_.name -like "*windows*" } | Select-Object -First 1
-
-if (-not $asset) {
-    Write-Error "No Windows release asset found. Check https://github.com/$repo/releases"
+try {
+    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
+} catch {
+    Write-Error "Could not reach GitHub API: $_`nCheck your internet connection or try again later."
     exit 1
 }
 
+$asset = $release.assets | Where-Object { $_.name -like "*windows*" } | Select-Object -First 1
+if (-not $asset) {
+    Write-Error "No Windows release asset found in release '$($release.tag_name)'.`nCheck: https://github.com/$repo/releases"
+    exit 1
+}
+
+# ── Download ────────────────────────────────────────────────────────────────
 Write-Host "Downloading $($asset.name) ($([math]::Round($asset.size/1MB, 1)) MB)..."
-$zipPath = "$env:TEMP\$($asset.name)"
-Invoke-WebRequest $asset.browser_download_url -OutFile $zipPath
+try {
+    Invoke-WebRequest $asset.browser_download_url -OutFile $zipPath
+} catch {
+    Write-Error "Download failed: $_"
+    exit 1
+}
 
+# ── Install ─────────────────────────────────────────────────────────────────
 Write-Host "Installing to $installDir..."
-if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
-New-Item -ItemType Directory -Path $installDir | Out-Null
-Expand-Archive $zipPath -DestinationPath $installDir -Force
-Remove-Item $zipPath
+try {
+    if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $installDir | Out-Null
+    Expand-Archive $zipPath -DestinationPath $installDir -Force
+} catch {
+    # Leave no broken state
+    if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+    Write-Error "Extraction failed: $_"
+    exit 1
+} finally {
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+}
 
-# Desktop shortcut
-$shell           = New-Object -ComObject WScript.Shell
-$shortcut        = $shell.CreateShortcut("$desktop\NetServer.lnk")
-$shortcut.TargetPath       = "$installDir\NetServer.exe"
+# ── Validate ────────────────────────────────────────────────────────────────
+$exe = "$installDir\NetServer.exe"
+if (-not (Test-Path $exe)) {
+    Remove-Item $installDir -Recurse -Force
+    Write-Error "NetServer.exe not found after extraction. The release package may be corrupted."
+    exit 1
+}
+
+# ── Desktop shortcut ────────────────────────────────────────────────────────
+$shell                     = New-Object -ComObject WScript.Shell
+$shortcut                  = $shell.CreateShortcut("$desktop\NetServer.lnk")
+$shortcut.TargetPath       = $exe
 $shortcut.WorkingDirectory = $installDir
 $shortcut.Description      = "NetworkMiddleware Authoritative Server"
 $shortcut.Save()

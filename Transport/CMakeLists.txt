@@ -1,5 +1,3 @@
-find_package(SFML COMPONENTS network REQUIRED)
-
 add_library(MiddlewareTransport STATIC
         SFMLTransport.cpp
         SFMLTransport.h
