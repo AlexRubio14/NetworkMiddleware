@@ -24,7 +24,7 @@ P-4.5 closes Fase 4 with two deliverables:
 
 The handoff originally proposed storing CRC inside `PacketHeader`. This is architecturally incorrect: `PacketHeader` is serialized _before_ the payload, so it cannot cover payload bytes. The implemented wire format is:
 
-```
+```text
 [Header: 13 bytes] [Payload: N bytes] [CRC32: 4 bytes]
 ```
 

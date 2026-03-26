@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_TESTS "Build unit tests (skips SFML-dependent modules)" OFF)
+option(SFML_STATIC_LIBRARIES "Link SFML statically (required for standalone distribution)" OFF)
+# Propagate into the cache so FindSFML.cmake picks it up before find_package is called
+set(SFML_STATIC_LIBRARIES ${SFML_STATIC_LIBRARIES} CACHE BOOL "" FORCE)
 
 add_subdirectory(Shared)
 add_subdirectory(Core)

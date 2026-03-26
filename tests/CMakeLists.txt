@@ -48,6 +48,7 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(MiddlewareTests  PRIVATE --coverage -fprofile-update=atomic)
     target_compile_options(MiddlewareShared PUBLIC  --coverage -fprofile-update=atomic)
     target_compile_options(MiddlewareCore   PUBLIC  --coverage -fprofile-update=atomic)
+    target_compile_options(Brain            PUBLIC  --coverage -fprofile-update=atomic)
     target_link_options(MiddlewareTests PRIVATE --coverage)
 endif()
 

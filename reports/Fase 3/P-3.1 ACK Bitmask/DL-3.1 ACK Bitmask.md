@@ -10,6 +10,10 @@ status: personal
 **Propuesta:** [[proposals/P-3.1 ACK Bitmask]]
 **Fecha:** 2026-03-21
 
+> **Nota:** Este documento describe la iteración 1 de P-3.1 (type: 8 bits).
+> La iteración 2 partió el byte en `type(4) + flags(4)` — ver **DL-3.1b**.
+> El formato de wire definitivo es el de DL-3.1b; los fragmentos de código aquí son históricos.
+
 ---
 
 ## ¿Qué problema resolvíamos?

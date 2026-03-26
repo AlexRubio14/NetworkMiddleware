@@ -47,6 +47,10 @@ namespace NetworkMiddleware::Core {
     class NetworkManager {
     public:
         static constexpr uint16_t             kMaxClients       = 100;
+        // Cap the pending-handshake table to bound memory under a SYN-flood.
+        // A spoofed ConnectionRequest flood cannot exceed this many in-flight entries
+        // and cannot exhaust networkID space before a ChallengeResponse proves reachability.
+        static constexpr size_t               kMaxPendingClients = 256;
         static constexpr std::chrono::seconds kHandshakeTimeout{5};
         static constexpr uint8_t              kMaxRetries       = 10;
         static constexpr std::chrono::milliseconds kResendInterval{100};
@@ -65,6 +69,16 @@ namespace NetworkMiddleware::Core {
 
         std::map<Shared::EndPoint, RemoteClient>     m_pendingClients;      // En handshake
         std::map<Shared::EndPoint, RemoteClient>     m_establishedClients;  // Conectados
+
+        // Short-lived record kept after SendConnectionAccepted so that a lost
+        // ConnectionAccepted can be retransmitted when the client retries its
+        // ChallengeResponse.  Entries expire after kHandshakeTimeout.
+        struct AcceptedEntry {
+            uint16_t                              networkID = 0;
+            uint64_t                              token     = 0;
+            std::chrono::steady_clock::time_point expiry;
+        };
+        std::map<Shared::EndPoint, AcceptedEntry> m_recentlyAccepted;
 
         uint16_t                                     m_nextNetworkID = 1;
         std::mt19937_64                              m_rng{std::random_device{}()};

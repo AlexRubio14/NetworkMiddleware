@@ -213,6 +213,11 @@ namespace NetworkMiddleware::Core {
             }
             return false;
         });
+
+        // Purge expired accepted-grace entries.
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(m_recentlyAccepted,
+            [&now](const auto& entry) { return now >= entry.second.expiry; });
     }
 
     // -------------------------------------------------------------------------
@@ -235,6 +240,16 @@ namespace NetworkMiddleware::Core {
             Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
                 std::format("Servidor lleno ({} clientes). Rechazando: {}", kMaxClients, sender.ToString()));
             SendHeaderOnly(Shared::PacketType::ConnectionDenied, sender);
+            return;
+        }
+
+        // Cap the pending table to prevent a spoofed-IP flood from exhausting
+        // memory or burning through the uint16_t networkID space before any
+        // ChallengeResponse proves reachability.
+        if (m_pendingClients.size() >= kMaxPendingClients) {
+            Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
+                std::format("Pending table full ({} entries). Dropping ConnectionRequest from {}.",
+                    kMaxPendingClients, sender.ToString()));
             return;
         }
 
@@ -270,6 +285,23 @@ namespace NetworkMiddleware::Core {
     // en lugar de volver a incrementar m_nextNetworkID.
     // -------------------------------------------------------------------------
     void NetworkManager::HandleChallengeResponse(Shared::BitReader& reader, const Shared::EndPoint& sender) {
+        // If the sender is already established, the ConnectionAccepted was lost in
+        // transit.  Resend it so the client can complete its state machine.
+        if (auto eit = m_establishedClients.find(sender); eit != m_establishedClients.end()) {
+            SendConnectionAccepted(sender, eit->second.networkID, eit->second.reconnectionToken);
+            return;
+        }
+
+        // If we have a recent accepted-grace record for this endpoint (e.g. the
+        // client accepted but our ConnectionAccepted was dropped twice), resend.
+        if (auto ait = m_recentlyAccepted.find(sender); ait != m_recentlyAccepted.end()) {
+            if (std::chrono::steady_clock::now() < ait->second.expiry) {
+                SendConnectionAccepted(sender, ait->second.networkID, ait->second.token);
+                return;
+            }
+            m_recentlyAccepted.erase(ait);
+        }
+
         auto it = m_pendingClients.find(sender);
         if (it == m_pendingClients.end()) {
             Shared::Logger::Log(Shared::LogLevel::Warning, Shared::LogChannel::Core,
@@ -314,6 +346,13 @@ namespace NetworkMiddleware::Core {
 
         m_establishedClients.emplace(sender, std::move(newClient));
         m_pendingClients.erase(it);
+
+        // Keep a short grace record so a lost ConnectionAccepted can be retransmitted
+        // if the client retries its ChallengeResponse within kHandshakeTimeout.
+        m_recentlyAccepted[sender] = {
+            assignedID, token,
+            std::chrono::steady_clock::now() + kHandshakeTimeout
+        };
 
         Shared::Logger::Log(Shared::LogLevel::Info, Shared::LogChannel::Core,
             std::format("Cliente {} conectado. NetworkID={}", sender.ToString(), assignedID));

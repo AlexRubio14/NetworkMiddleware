@@ -174,6 +174,9 @@ int main() {
         bot.SendInput(chaosDirX, chaosDirY, static_cast<uint8_t>(btn(rng)));
 
         nextTick += kTickInterval;
+        // If the process was descheduled and nextTick fell behind wall-clock, reset
+        // it to avoid a burst of back-to-back sends that skews the traffic profile.
+        if (nextTick < now) nextTick = now;
         std::this_thread::sleep_until(nextTick);
     }
 

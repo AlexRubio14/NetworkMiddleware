@@ -321,16 +321,8 @@ TEST(GameWorld, BatchSnapshot_DeltaBaselinePerEntity) {
 
     // Simulate ACK: feed an input packet so ProcessAcks runs.
     // Build minimal input packet echoing the seq that was just sent.
-    {
-        const uint16_t sentSeq = static_cast<uint16_t>(
-            transport->sentPackets.back().first.size());  // not the real seq — use helper
-        (void)sentSeq;
-        // Instead, directly feed a fake incoming packet that ProcessAcks will handle.
-        // Use the public Update() path: inject an input packet from the bot side.
-        // For simplicity, call ProcessAckedSeq on the client directly via a second
-        // RecordBatch+ProcessAckedSeq cycle — the integration is already covered by
-        // SnapshotHistory tests.  Here we just verify the size reduction after ACK.
-    }
+    // ACK simulation is covered by SnapshotHistory tests; here we only verify
+    // that the first snapshot is larger than a subsequent full-sync packet.
 
     // Second send with identical state — without ACK the baseline is not confirmed,
     // so still a full sync.  Payload size must equal the first.

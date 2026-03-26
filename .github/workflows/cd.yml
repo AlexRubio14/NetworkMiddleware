@@ -1,0 +1,153 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows: SFML static → standalone .exe ─────────────────────────────────
+  build-windows:
+    name: Build Windows (static)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SFML via vcpkg (static)
+        run: vcpkg install sfml:x64-windows-static
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DSFML_STATIC_LIBRARIES=ON
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          cmake --install build --config Release --prefix dist
+          Compress-Archive -Path dist/* -DestinationPath NetServer-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: NetServer-windows-x64.zip
+
+  # ── Linux: AppImage → standalone, sin dependencias ─────────────────────────
+  build-linux:
+    name: Build Linux (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsfml-dev fuse
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Download linuxdeploy
+        run: |
+          curl -Lo linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+
+      - name: Create icon
+        run: |
+          python3 - <<'EOF'
+          import zlib, struct
+
+          def chunk(tag, data):
+              buf = tag + data
+              return struct.pack('>I', len(data)) + buf + struct.pack('>I', zlib.crc32(buf) & 0xffffffff)
+
+          W, H, R, G, B = 256, 256, 13, 27, 42
+          ihdr = struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0)
+          raw  = b''.join(b'\x00' + bytes([R, G, B] * W) for _ in range(H))
+          png  = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+
+          with open('NetServer.png', 'wb') as f:
+              f.write(png)
+          EOF
+
+      - name: Create .desktop file
+        run: |
+          cat > NetServer.desktop <<'EOF'
+          [Desktop Entry]
+          Name=NetServer
+          Exec=NetServer
+          Icon=NetServer
+          Type=Application
+          Categories=Network;
+          Terminal=true
+          EOF
+
+      - name: Package AppImage
+        run: |
+          ./linuxdeploy.AppImage \
+            --appdir AppDir \
+            --executable build/Server/NetServer \
+            --desktop-file NetServer.desktop \
+            --icon-file NetServer.png \
+            --output appimage
+          mv NetServer-x86_64.AppImage NetServer-linux-x64.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: NetServer-linux-x64.AppImage
+
+  # ── GitHub Release ──────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate tag
+        id: tag
+        run: |
+          echo "tag=release-$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "NetworkMiddleware ${{ steps.tag.outputs.tag }}"
+          make_latest: true
+          body: |
+            ## NetworkMiddleware Authoritative Server
+
+            ### Windows — standalone, sin dependencias
+            **Instalar con un comando (PowerShell):**
+            ```powershell
+            irm https://raw.githubusercontent.com/AlexRubio14/NetworkMiddleware/main/install.ps1 | iex
+            ```
+            O descarga `NetServer-windows-x64.zip`, extrae y doble-click en `NetServer.exe`.
+
+            ### Linux — standalone AppImage, sin dependencias
+            **Instalar con un comando (bash):**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/AlexRubio14/NetworkMiddleware/main/install.sh | bash
+            ```
+            O descarga `NetServer-linux-x64.AppImage`, hazlo ejecutable y ejecútalo:
+            ```bash
+            chmod +x NetServer-linux-x64.AppImage && ./NetServer-linux-x64.AppImage
+            ```
+          files: |
+            windows-x64/NetServer-windows-x64.zip
+            linux-x64/NetServer-linux-x64.AppImage
