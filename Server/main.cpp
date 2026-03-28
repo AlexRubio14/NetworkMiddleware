@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <format>
 #include <latch>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -152,12 +153,21 @@ int main(int argc, char* argv[]) {
     Brain::KalmanPredictor      kalmanPredictor;
     uint32_t                    tickID = 0;
 
+    // P-6.3 benchmark: spread heroes across the map so FOW interest management
+    // filters entities from tick 1 (not just after a random-walk warm-up period).
+    // Distribution: uniform ±400 units — leaves a 100-unit margin from the edge.
+    std::mt19937                          spawnRng{std::random_device{}()};
+    std::uniform_real_distribution<float> spawnDist(-400.0f, 400.0f);
+
     manager.SetClientConnectedCallback(
-        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+        [&gameWorld, &kalmanPredictor, &spawnRng, &spawnDist](uint16_t id, const EndPoint& ep) {
+            const float sx = spawnDist(spawnRng);
+            const float sy = spawnDist(spawnRng);
             Logger::Log(LogLevel::Success, LogChannel::Core,
-                std::format("CLIENT CONNECTED   NetworkID={}  ep={}", id, ep.ToString()));
-            gameWorld.AddHero(id);
-            kalmanPredictor.AddEntity(id, 0.0f, 0.0f);
+                std::format("CLIENT CONNECTED   NetworkID={}  ep={}  spawn=({:.0f},{:.0f})",
+                    id, ep.ToString(), sx, sy));
+            gameWorld.AddHero(id, sx, sy);
+            kalmanPredictor.AddEntity(id, sx, sy);
         });
 
     manager.SetClientDisconnectedCallback(

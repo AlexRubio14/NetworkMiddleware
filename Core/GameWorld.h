@@ -50,10 +50,10 @@ namespace NetworkMiddleware::Core {
         // P-5.3 Lag Compensation: 32 slots × 10ms = 320ms rewind window (> 200ms limit).
         static constexpr size_t kRewindSlots   = 32;
 
-        // Spawn a ViegoEntity at origin for the given networkID.
-        // Silently ignores duplicate IDs (idempotent — safe to call from
-        // OnClientConnected even if the client reconnects without full cleanup).
-        void AddHero(uint32_t networkID);
+        // Spawn a ViegoEntity for the given networkID at (spawnX, spawnY).
+        // Defaults to the origin. Silently ignores duplicate IDs (idempotent —
+        // safe to call from OnClientConnected even on reconnection).
+        void AddHero(uint32_t networkID, float spawnX = 0.0f, float spawnY = 0.0f);
 
         // Remove the hero with the given networkID (called on disconnect).
         void RemoveHero(uint32_t networkID);

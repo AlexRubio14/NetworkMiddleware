@@ -13,11 +13,14 @@ namespace NetworkMiddleware::Core {
                 })
     {}
 
-    void GameWorld::AddHero(uint32_t networkID) {
+    void GameWorld::AddHero(uint32_t networkID, float spawnX, float spawnY) {
         if (m_heroes.contains(networkID))
             return;
-        m_heroes.emplace(networkID, m_heroFactory(networkID));
+        auto& hero = *m_heroes.emplace(networkID, m_heroFactory(networkID)).first->second;
         m_rewindHistory.emplace(networkID, std::array<RewindEntry, kRewindSlots>{});
+        if (spawnX != 0.0f || spawnY != 0.0f)
+            hero.SetPosition(std::clamp(spawnX, -kMapBound, kMapBound),
+                             std::clamp(spawnY, -kMapBound, kMapBound));
     }
 
     void GameWorld::RemoveHero(uint32_t networkID) {
