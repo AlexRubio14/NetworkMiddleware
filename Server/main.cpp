@@ -170,6 +170,9 @@ int main(int argc, char* argv[]) {
             kalmanPredictor.AddEntity(id, sx, sy);
         });
 
+    // ── P-6.3 Visibility Tracker ──────────────────────────────────────────────
+    Core::VisibilityTracker visTracker;
+
     manager.SetClientDisconnectedCallback(
         [&gameWorld, &kalmanPredictor, &visTracker](uint16_t id, const EndPoint& ep) {
             Logger::Log(LogLevel::Warning, LogChannel::Core,
@@ -198,9 +201,6 @@ int main(int argc, char* argv[]) {
 
     // ── P-5.4 Priority Evaluator ──────────────────────────────────────────────
     Brain::PriorityEvaluator priorityEvaluator;
-
-    // ── P-6.3 Visibility Tracker ──────────────────────────────────────────────
-    Core::VisibilityTracker visTracker;
 
     // ── P-5.3 Lag Compensation constants ─────────────────────────────────────
     static constexpr uint32_t kMaxRewindTicks  = 20;    // 200ms at 100Hz
