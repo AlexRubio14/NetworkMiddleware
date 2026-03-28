@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\CMakeFiles\7b07054eaa4b6deb62c3d913bc6225e5\RUN_TESTS_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{7D2D5B3B-7760-35F0-AD45-D9CCA45B4DF5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
