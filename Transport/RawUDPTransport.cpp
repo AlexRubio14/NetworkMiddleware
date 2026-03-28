@@ -53,7 +53,7 @@ namespace NetworkMiddleware::Transport {
 
     const sockaddr_in& RawUDPTransport::GetOrBuildAddr(const Shared::EndPoint& ep)
     {
-        auto it = m_addrCache.find(ep.address);
+        auto it = m_addrCache.find(ep);
         if (it != m_addrCache.end())
             return it->second;
 
@@ -62,7 +62,7 @@ namespace NetworkMiddleware::Transport {
         addr.sin_port        = htons(ep.port);
         addr.sin_addr.s_addr = htonl(ep.address);
 
-        auto [inserted, ok] = m_addrCache.emplace(ep.address, addr);
+        auto [inserted, ok] = m_addrCache.emplace(ep, addr);
         (void)ok;
         return inserted->second;
     }
