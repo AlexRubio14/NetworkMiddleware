@@ -156,16 +156,51 @@ int main(int argc, char* argv[]) {
     // P-6.3 benchmark: spread heroes across the map so FOW interest management
     // filters entities from tick 1 (not just after a random-walk warm-up period).
     // Distribution: uniform ±400 units — leaves a 100-unit margin from the edge.
-    std::mt19937                          spawnRng{std::random_device{}()};
-    std::uniform_real_distribution<float> spawnDist(-400.0f, 400.0f);
+    //
+    // SPAWN_ZONE_MODE env var (for FOW benchmark):
+    //   random  (default) — uniform ±400 on both axes
+    //   bimodal           — alternates between zone A (x∈[-400,-200]) and
+    //                       zone B (x∈[200,400]); groups are ~400+ units apart,
+    //                       well beyond DEFAULT_VISION_RANGE=150 → cross-group
+    //                       entities are fully filtered by FOW
+    //   cluster           — all bots within ±80 units of origin; every bot sees
+    //                       every other bot → maximum bandwidth baseline
+    std::mt19937 spawnRng{std::random_device{}()};
+
+    const char* spawnZoneEnv = std::getenv("SPAWN_ZONE_MODE");
+    const std::string spawnZoneMode = spawnZoneEnv ? spawnZoneEnv : "random";
+
+    std::uniform_real_distribution<float> spawnDistRandom(-400.0f, 400.0f);
+    std::uniform_real_distribution<float> spawnZoneA_X(-400.0f, -200.0f);
+    std::uniform_real_distribution<float> spawnZoneB_X( 200.0f,  400.0f);
+    std::uniform_real_distribution<float> spawnZone_Y (-100.0f,  100.0f);
+    std::uniform_real_distribution<float> spawnCluster( -80.0f,   80.0f);
+
+    std::atomic<uint32_t> spawnCounter{0};
 
     manager.SetClientConnectedCallback(
-        [&gameWorld, &kalmanPredictor, &spawnRng, &spawnDist](uint16_t id, const EndPoint& ep) {
-            const float sx = spawnDist(spawnRng);
-            const float sy = spawnDist(spawnRng);
+        [&gameWorld, &kalmanPredictor, &spawnRng,
+         &spawnDistRandom, &spawnZoneA_X, &spawnZoneB_X, &spawnZone_Y, &spawnCluster,
+         &spawnZoneMode, &spawnCounter]
+        (uint16_t id, const EndPoint& ep) {
+            float sx{}, sy{};
+            const uint32_t idx = spawnCounter.fetch_add(1, std::memory_order_relaxed);
+
+            if (spawnZoneMode == "bimodal") {
+                // Even connections → Zone A (left), odd → Zone B (right)
+                sx = (idx % 2 == 0) ? spawnZoneA_X(spawnRng) : spawnZoneB_X(spawnRng);
+                sy = spawnZone_Y(spawnRng);
+            } else if (spawnZoneMode == "cluster") {
+                sx = spawnCluster(spawnRng);
+                sy = spawnCluster(spawnRng);
+            } else {
+                sx = spawnDistRandom(spawnRng);
+                sy = spawnDistRandom(spawnRng);
+            }
+
             Logger::Log(LogLevel::Success, LogChannel::Core,
-                std::format("CLIENT CONNECTED   NetworkID={}  ep={}  spawn=({:.0f},{:.0f})",
-                    id, ep.ToString(), sx, sy));
+                std::format("CLIENT CONNECTED   NetworkID={}  ep={}  spawn=({:.0f},{:.0f})  zone={}",
+                    id, ep.ToString(), sx, sy, spawnZoneMode));
             gameWorld.AddHero(id, sx, sy);
             kalmanPredictor.AddEntity(id, sx, sy);
         });
