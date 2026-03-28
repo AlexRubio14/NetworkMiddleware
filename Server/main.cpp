@@ -55,6 +55,7 @@
 #include "../Core/GameWorld.h"
 #include "../Core/HitValidator.h"
 #include "../Core/JobSystem.h"
+#include "../Core/AsyncSendDispatcher.h"
 #include "../Core/NetworkManager.h"
 #include "../Core/SpatialGrid.h"
 #include "../Shared/Log/Logger.h"
@@ -118,12 +119,15 @@ int main(int argc, char* argv[]) {
     }
 
     // P-6.1: Use native POSIX sockets on Linux (sendmmsg — 1 syscall per tick).
-    // Windows keeps SFML for local dev / CI.
+    // P-6.2: Wrap with AsyncSendDispatcher — sendmmsg runs off the game loop.
+    // Windows keeps SFML for local dev / CI (no dispatcher).
+    auto transport = []() -> std::shared_ptr<Shared::ITransport> {
 #ifdef __linux__
-    auto transport = TransportFactory::Create(TransportType::NATIVE_LINUX);
+        return TransportFactory::Create(TransportType::NATIVE_LINUX);
 #else
-    auto transport = TransportFactory::Create(TransportType::SFML);
+        return TransportFactory::Create(TransportType::SFML);
 #endif
+    }();
     if (!transport->Initialize(port)) {
         Logger::Log(LogLevel::Error, LogChannel::Transport,
             std::format("Failed to bind UDP socket on port {} — aborting", port));
@@ -136,7 +140,12 @@ int main(int argc, char* argv[]) {
 
     // ── NetworkManager + GameWorld ────────────────────────────────────────────
 
+#ifdef __linux__
+    auto dispatcher = std::make_unique<Core::AsyncSendDispatcher>(transport);
+    NetworkManager              manager(transport, std::move(dispatcher));
+#else
     NetworkManager              manager(transport);
+#endif
     GameWorld                   gameWorld;
     SpatialGrid                 spatialGrid;
     Brain::KalmanPredictor      kalmanPredictor;
@@ -426,7 +435,14 @@ int main(int argc, char* argv[]) {
         // RecordEntitySnapshotsSent is now called inside CommitAndSendBatchSnapshot
         // so the count is always accurate regardless of code path.
 
-        if (!snapshots.empty()) {
+        // P-6.2: 30Hz snapshot rate — simulate at 100Hz, send every 3rd tick.
+        // Reduces bandwidth ~3x (100Hz → 30Hz out). Phase A+B are skipped on
+        // the other 2 ticks; the gather loop above still runs at 100Hz so FOW
+        // and LOD tier data remain fresh.
+        static constexpr int kSnapshotEveryNTicks = 3;
+        const bool sendThisTick = (tickID % kSnapshotEveryNTicks == 0);
+
+        if (!snapshots.empty() && sendThisTick) {
             if (parallelMode) {
                 // Phase A — parallel serialization (one job per client, not per entity).
                 // The latch size is now O(clients), not O(clients × entities).
@@ -470,9 +486,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // P-6.1: Flush all queued sends via sendmmsg (1 syscall for all clients).
-        // No-op on SFML transport.
-        manager.FlushTransport();
+        // P-6.2: Signal the async send thread (or flush synchronously on SFML).
+        // On Linux: returns immediately — sendmmsg runs off the game loop.
+        // On Windows / fallback: synchronous Flush() as before.
+        if (sendThisTick)
+            manager.FlushTransport();
 
         // 5. Advance tick counter
         ++tickID;

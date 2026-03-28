@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux. Goal: outperform Photon Bolt / Mirror / UE Replication in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–5.x complete (2026-03-26). 231/231 tests passing (Windows/MSVC).
-P-5.x regression fixes done: per-entity delta baselines + batch snapshot pipeline.
+**Current status:** Phases 1–6.2 complete (2026-03-28). 236/236 tests passing (Windows/MSVC).
+P-6.1: RawUDPTransport — POSIX sockets + sendmmsg batch dispatch (Linux).
+P-6.2: AsyncSendDispatcher — sendmmsg moved off the game loop via jthread + CV.
 CD pipeline active (GitHub Actions → GitHub Releases + Docker GHCR).
 
 ## Build Commands

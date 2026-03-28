@@ -2,6 +2,7 @@
 #ifdef __linux__
 
 #include "ITransport.h"
+#include <mutex>
 #include <netinet/in.h>
 #include <unordered_map>
 #include <vector>
@@ -19,12 +20,19 @@ namespace NetworkMiddleware::Transport {
         };
 
         int                                           m_sockfd = -1;
-        std::unordered_map<uint32_t, sockaddr_in>     m_addrCache;
-        std::vector<OutMessage>                       m_sendQueue;
+        std::unordered_map<uint32_t, sockaddr_in>     m_addrCache;   // main thread only
+
+        // P-6.2: Swap-buffer — producer (main) writes m_sendQueue, consumer
+        // (send thread) atomically swaps and processes m_flushQueue.
+        // m_queueMutex is held only during the O(1) swap, not during sendmmsg.
+        std::vector<OutMessage>  m_sendQueue;
+        std::vector<OutMessage>  m_flushQueue;
+        std::mutex               m_queueMutex;
 
         static constexpr int kSendBufSize = 4 * 1024 * 1024;  // 4 MB
         static constexpr int kRecvBufSize = 4 * 1024 * 1024;  // 4 MB
 
+        // Main-thread only — no mutex needed (m_addrCache is never touched by Flush).
         const sockaddr_in& GetOrBuildAddr(const Shared::EndPoint& ep);
 
     public:

@@ -27,6 +27,7 @@ add_executable(MiddlewareTests
     Core/SpatialGridTests.cpp
     Brain/KalmanTests.cpp
     Brain/PriorityEvaluatorTests.cpp
+    Core/AsyncSendDispatcherTests.cpp
 )
 
 # P-6.1: RawUDPTransport tests — Linux only (uses POSIX sockets, no SFML).
