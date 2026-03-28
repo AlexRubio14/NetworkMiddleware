@@ -1,5 +1,0 @@
-if(EXISTS "C:/Users/alexr/RiderProjects/NetworkMiddleware/cmake-build-test/tests/MiddlewareTests[1]_tests.cmake")
-  include("C:/Users/alexr/RiderProjects/NetworkMiddleware/cmake-build-test/tests/MiddlewareTests[1]_tests.cmake")
-else()
-  add_test(MiddlewareTests_NOT_BUILT MiddlewareTests_NOT_BUILT)
-endif()
