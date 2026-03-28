@@ -1,0 +1,111 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\ITransport.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Log\Logger.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Serialization\BitWriter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Serialization\BitReader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\BaseHero.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Data\Network\NetworkOptimizer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Data\Network\HeroSerializer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\ViegoEntity.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Network\PacketHeader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\NetworkAddress.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\GameplayConstants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\ITransport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\TransportType.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Log\Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Log\LogChannel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Log\LogEntry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Log\LogLevel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Serialization\BitWriter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Serialization\BitReader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Serialization\CRC32.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\INetworkable.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Data\HeroState.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\IHero.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\BaseHero.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\HeroDirtyBits.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Data\Network\NetworkOptimizer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Data\Network\HeroSerializer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Gameplay\ViegoEntity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Network\PacketTypes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Network\PacketHeader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\Network\HandshakePackets.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\Shared\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{1BB674A1-162F-36F5-923E-D0FDA970EABD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{EE2BFDF2-50CB-3BBA-B35A-4754C1EDBDE9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\7d8e387fe5aece19f643290a41206adc\googletest-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\8c00b77cea9b6b935149b57872f81880\googletest-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\595c0b1d3e4fd620d418e9403d9e6006\googletest-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\cmake-build-test\_deps\googletest-subbuild\CMakeFiles\googletest-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{EDF8A8E2-D41C-3AF6-BEB6-632574BC6B2F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

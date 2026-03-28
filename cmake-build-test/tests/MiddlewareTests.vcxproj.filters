@@ -1,0 +1,64 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\BitWriterReaderTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\LoggerTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\PacketHeaderTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\SequenceContextTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\NetworkOptimizerTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\HeroSerializerTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Shared\DeltaCompressionTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\CRC32Tests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\NetworkManagerTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\SessionRecoveryTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\BotIntegrationTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\ProfilerTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\GameWorldTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\JobSystemTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Core\SpatialGridTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Brain\KalmanTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\Brain\PriorityEvaluatorTests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\alexr\RiderProjects\NetworkMiddleware\tests\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{EE2BFDF2-50CB-3BBA-B35A-4754C1EDBDE9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
