@@ -30,6 +30,7 @@ add_executable(MiddlewareTests
     Core/AsyncSendDispatcherTests.cpp
     Core/VisibilityTrackerTests.cpp
     Core/InterestManagementTests.cpp
+    Core/FowScalabilityTests.cpp
 )
 
 # P-6.1: RawUDPTransport tests — Linux only (uses POSIX sockets, no SFML).
