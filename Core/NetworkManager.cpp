@@ -8,8 +8,10 @@
 
 namespace NetworkMiddleware::Core {
 
-    NetworkManager::NetworkManager(std::shared_ptr<Shared::ITransport> transport)
-        : m_transport(std::move(transport)) {}
+    NetworkManager::NetworkManager(std::shared_ptr<Shared::ITransport> transport,
+                                   std::unique_ptr<AsyncSendDispatcher> dispatcher)
+        : m_transport(std::move(transport))
+        , m_dispatcher(std::move(dispatcher)) {}
 
     void NetworkManager::SetDataCallback(OnDataReceivedCallback callback) {
         m_onDataReceived = std::move(callback);
@@ -1034,10 +1036,17 @@ namespace NetworkMiddleware::Core {
     }
 
     // -------------------------------------------------------------------------
-    // FlushTransport — P-6.1 sendmmsg batch dispatch
+    // FlushTransport — P-6.1/P-6.2 send dispatch
     // -------------------------------------------------------------------------
+    // P-6.2: If a dispatcher is present (Linux production), signals the async
+    // send thread to wake and call Flush(). The main thread returns immediately
+    // without waiting for sendmmsg to complete — zero I/O on the game loop.
+    // Fallback (SFML / Windows / tests): synchronous Flush() as before.
     void NetworkManager::FlushTransport() {
-        m_transport->Flush();
+        if (m_dispatcher)
+            m_dispatcher->Signal();
+        else
+            m_transport->Flush();
     }
 
     // -------------------------------------------------------------------------

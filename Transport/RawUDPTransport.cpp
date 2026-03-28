@@ -68,29 +68,41 @@ namespace NetworkMiddleware::Transport {
     }
 
     // ── Send ─────────────────────────────────────────────────────────────────
-    // Accumulates outgoing messages. Flush() dispatches them all via sendmmsg.
+    // P-6.2: Thread-safe. Holds m_queueMutex only during push (O(1)).
+    // GetOrBuildAddr() accesses m_addrCache (main-thread only) before locking.
 
     void RawUDPTransport::Send(const std::vector<uint8_t>& buffer, const Shared::EndPoint& recipient)
     {
         if (m_sockfd == -1) return;
-        m_sendQueue.push_back({ buffer, GetOrBuildAddr(recipient) });
+        const sockaddr_in& addr = GetOrBuildAddr(recipient);  // main thread — no lock needed
+        std::lock_guard lock(m_queueMutex);
+        m_sendQueue.push_back({ buffer, addr });
     }
 
     // ── Flush ─────────────────────────────────────────────────────────────────
-    // P-6.1 core optimization: sends every queued packet in 1 syscall.
-    // Before: 49 sendto() calls = 49 syscalls per tick (~7.2ms).
-    // After:  1 sendmmsg() call = 1 syscall per tick (target <1ms).
+    // P-6.1: 1 sendmmsg syscall for all queued packets.
+    // P-6.2: Called by the AsyncSendDispatcher thread. Swap-buffer pattern:
+    //   1. Lock → swap(m_sendQueue, m_flushQueue) → unlock  (O(1), minimal contention)
+    //   2. sendmmsg from m_flushQueue (no lock held during syscall)
+    //   3. clear m_flushQueue (keeps capacity — avoids reallocation next tick)
 
     void RawUDPTransport::Flush()
     {
-        if (m_sockfd == -1 || m_sendQueue.empty()) return;
+        if (m_sockfd == -1) return;
 
-        const size_t n = m_sendQueue.size();
+        {
+            std::lock_guard lock(m_queueMutex);
+            if (m_sendQueue.empty()) return;
+            std::swap(m_sendQueue, m_flushQueue);  // O(1) pointer swap
+        }
+        // Lock released — sendmmsg runs without contention.
+
+        const size_t n = m_flushQueue.size();
         std::vector<mmsghdr> mmhdrs(n);
         std::vector<iovec>   iovecs(n);
 
         for (size_t i = 0; i < n; ++i) {
-            auto& msg = m_sendQueue[i];
+            auto& msg = m_flushQueue[i];
             iovecs[i].iov_base = msg.buffer.data();
             iovecs[i].iov_len  = msg.buffer.size();
 
@@ -105,7 +117,7 @@ namespace NetworkMiddleware::Transport {
         }
 
         ::sendmmsg(m_sockfd, mmhdrs.data(), static_cast<unsigned int>(n), 0);
-        m_sendQueue.clear();
+        m_flushQueue.clear();  // retains capacity — no reallocation on next tick
     }
 
     // ── Receive ───────────────────────────────────────────────────────────────

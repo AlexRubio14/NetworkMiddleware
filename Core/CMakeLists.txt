@@ -3,6 +3,8 @@
 find_package(Threads REQUIRED)
 
 add_library(MiddlewareCore STATIC
+        AsyncSendDispatcher.h
+        AsyncSendDispatcher.cpp
         NetworkManager.h
         NetworkManager.cpp
         NetworkProfiler.h
