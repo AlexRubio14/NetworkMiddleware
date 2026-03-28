@@ -20,7 +20,16 @@ namespace NetworkMiddleware::Transport {
         };
 
         int                                           m_sockfd = -1;
-        std::unordered_map<uint32_t, sockaddr_in>     m_addrCache;   // main thread only
+
+        // Cache keyed by full EndPoint (address + port) so distinct clients on the
+        // same IP (e.g. all bots on 127.0.0.1) never share a cached sockaddr_in.
+        struct EndPointHash {
+            std::size_t operator()(const Shared::EndPoint& ep) const noexcept {
+                return std::hash<uint64_t>{}(
+                    (static_cast<uint64_t>(ep.address) << 16) | ep.port);
+            }
+        };
+        std::unordered_map<Shared::EndPoint, sockaddr_in, EndPointHash> m_addrCache;  // main thread only
 
         // P-6.2: Swap-buffer — producer (main) writes m_sendQueue, consumer
         // (send thread) atomically swaps and processes m_flushQueue.
