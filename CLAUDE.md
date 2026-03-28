@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Engine-agnostic network middleware for MOBA games — C++20 bachelor's thesis (TFG). Authoritative dedicated server targeting Linux. Goal: outperform Photon Bolt / Mirror / UE Replication in bandwidth efficiency and latency.
 
-**Current status:** Phases 1–5.x complete (2026-03-26). 231/231 tests passing (Windows/MSVC).
-P-5.x regression fixes done: per-entity delta baselines + batch snapshot pipeline.
+**Current status:** Phases 1–6.3 complete (2026-03-28). 254/254 tests passing (Windows/MSVC).
+P-6.1: RawUDPTransport — POSIX sockets + sendmmsg batch dispatch (Linux).
+P-6.2: AsyncSendDispatcher — sendmmsg moved off the game loop via jthread + CV.
+P-6.3: Interest Management — VisibilityTracker re-entry detection + EvictEntityBaseline; FOW filter already active from P-5.1; bandwidth target ~13 kbps/client.
 CD pipeline active (GitHub Actions → GitHub Releases + Docker GHCR).
 
 ## Build Commands
@@ -35,7 +37,7 @@ cmake --build cmake-build-debug --config Debug
 - **Endianness-neutral.** Bitwise operators are endian-independent. No `SwapEndian` calls.
 - **Namespace:** `NetworkMiddleware` throughout.
 - **No implementation in headers** except templates and constexpr.
-- **TDD always.** Every new feature gets tests before or alongside implementation. 231 tests are the regression suite — never regress.
+- **TDD always.** Every new feature gets tests before or alongside implementation. 254 tests are the regression suite — never regress.
 - **Tick loop:** each cycle must complete in < 10ms (100Hz target). Flag any blocking calls inside the tick loop.
 - **sf::IpAddress(uint32_t)** expects big-endian (network byte order). ParseIpv4 returns big-endian.
 

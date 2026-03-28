@@ -17,6 +17,7 @@ namespace NetworkMiddleware::Tests {
     public:
         std::queue<IncomingPacket>                                          incomingQueue;
         std::vector<std::pair<std::vector<uint8_t>, Shared::EndPoint>>     sentPackets;
+        int                                                                 flushCount = 0;
 
         bool Initialize(uint16_t) override { return true; }
         void Close()              override {}
@@ -33,6 +34,8 @@ namespace NetworkMiddleware::Tests {
         void Send(const std::vector<uint8_t>& buffer, const Shared::EndPoint& recipient) override {
             sentPackets.push_back({buffer, recipient});
         }
+
+        void Flush() override { ++flushCount; }
 
         void InjectPacket(const std::vector<uint8_t>& data, const Shared::EndPoint& sender) {
             incomingQueue.push({data, sender});

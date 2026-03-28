@@ -27,7 +27,22 @@ add_executable(MiddlewareTests
     Core/SpatialGridTests.cpp
     Brain/KalmanTests.cpp
     Brain/PriorityEvaluatorTests.cpp
+    Core/AsyncSendDispatcherTests.cpp
+    Core/VisibilityTrackerTests.cpp
+    Core/InterestManagementTests.cpp
 )
+
+# P-6.1: RawUDPTransport tests — Linux only (uses POSIX sockets, no SFML).
+# Compile the transport source directly to avoid SFML linkage.
+if(UNIX)
+    target_sources(MiddlewareTests PRIVATE
+        Transport/RawUDPTransportTests.cpp
+        ../Transport/RawUDPTransport.cpp
+    )
+    target_include_directories(MiddlewareTests PRIVATE
+        ${CMAKE_SOURCE_DIR}/Transport
+    )
+endif()
 
 target_link_libraries(MiddlewareTests PRIVATE
     GTest::gtest_main

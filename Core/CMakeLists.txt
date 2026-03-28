@@ -3,6 +3,8 @@
 find_package(Threads REQUIRED)
 
 add_library(MiddlewareCore STATIC
+        AsyncSendDispatcher.h
+        AsyncSendDispatcher.cpp
         NetworkManager.h
         NetworkManager.cpp
         NetworkProfiler.h
@@ -17,6 +19,8 @@ add_library(MiddlewareCore STATIC
         JobSystem.cpp
         SpatialGrid.h
         SpatialGrid.cpp
+        VisibilityTracker.h
+        VisibilityTracker.cpp
         HitValidator.h
         HitValidator.cpp
 )

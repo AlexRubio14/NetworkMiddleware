@@ -1,4 +1,5 @@
 #pragma once
+#include "AsyncSendDispatcher.h"
 #include "../Shared/ITransport.h"
 #include "../Shared/Network/PacketHeader.h"
 #include "../Shared/Network/PacketTypes.h"
@@ -62,6 +63,7 @@ namespace NetworkMiddleware::Core {
 
     private:
         std::shared_ptr<Shared::ITransport>         m_transport;
+        std::unique_ptr<AsyncSendDispatcher>         m_dispatcher;  // P-6.2: nullable; null = sync flush
         OnDataReceivedCallback                       m_onDataReceived;
         OnClientConnectedCallback                    m_onClientConnected;
         OnClientDisconnectedCallback                 m_onClientDisconnected;
@@ -124,7 +126,11 @@ namespace NetworkMiddleware::Core {
         void SendRaw(const std::vector<uint8_t>& wireBytes, const Shared::EndPoint& to);
 
     public:
-        explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport);
+        // P-6.2: dispatcher is optional. Pass nullptr (default) for synchronous flush
+        // (SFML on Windows, unit tests). Pass an AsyncSendDispatcher on Linux for
+        // async sendmmsg dispatch.
+        explicit NetworkManager(std::shared_ptr<Shared::ITransport> transport,
+                                std::unique_ptr<AsyncSendDispatcher> dispatcher = nullptr);
 
         void SetDataCallback(OnDataReceivedCallback callback);
         void SetClientConnectedCallback(OnClientConnectedCallback callback);
@@ -213,6 +219,16 @@ namespace NetworkMiddleware::Core {
             const Shared::EndPoint& to,
             const std::vector<Shared::Data::HeroState>& states,
             const std::vector<uint8_t>& payload);
+
+        // P-6.1: Flush all pending outgoing packets via sendmmsg (RawUDPTransport).
+        // Call once per tick after Phase B (CommitAndSendBatchSnapshot loop).
+        // No-op when using SFMLTransport or MockTransport.
+        void FlushTransport();
+
+        // P-6.3: Evicts the delta baseline for entityID at client `ep`.
+        // Called from the game loop when VisibilityTracker detects a FOW re-entry.
+        // Forces the next SerializeBatchSnapshotFor to send a full state for that entity.
+        void EvictEntityBaseline(const Shared::EndPoint& ep, uint32_t entityID);
 
         // Returns the team ID of the established client at ep (0 or 1).
         // Returns 0 if the endpoint is not found (safe default for callers).

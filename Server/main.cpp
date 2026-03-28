@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <format>
 #include <latch>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -55,8 +56,10 @@
 #include "../Core/GameWorld.h"
 #include "../Core/HitValidator.h"
 #include "../Core/JobSystem.h"
+#include "../Core/AsyncSendDispatcher.h"
 #include "../Core/NetworkManager.h"
 #include "../Core/SpatialGrid.h"
+#include "../Core/VisibilityTracker.h"
 #include "../Shared/Log/Logger.h"
 #include "../Shared/Network/InputPackets.h"
 #include "../Shared/NetworkAddress.h"
@@ -117,7 +120,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto transport = TransportFactory::Create(TransportType::SFML);
+    // P-6.1: Use native POSIX sockets on Linux (sendmmsg — 1 syscall per tick).
+    // P-6.2: Wrap with AsyncSendDispatcher — sendmmsg runs off the game loop.
+    // Windows keeps SFML for local dev / CI (no dispatcher).
+    auto transport = []() -> std::shared_ptr<Shared::ITransport> {
+#ifdef __linux__
+        return TransportFactory::Create(TransportType::NATIVE_LINUX);
+#else
+        return TransportFactory::Create(TransportType::SFML);
+#endif
+    }();
     if (!transport->Initialize(port)) {
         Logger::Log(LogLevel::Error, LogChannel::Transport,
             std::format("Failed to bind UDP socket on port {} — aborting", port));
@@ -130,26 +142,41 @@ int main(int argc, char* argv[]) {
 
     // ── NetworkManager + GameWorld ────────────────────────────────────────────
 
+#ifdef __linux__
+    auto dispatcher = std::make_unique<Core::AsyncSendDispatcher>(transport);
+    NetworkManager              manager(transport, std::move(dispatcher));
+#else
     NetworkManager              manager(transport);
+#endif
     GameWorld                   gameWorld;
     SpatialGrid                 spatialGrid;
     Brain::KalmanPredictor      kalmanPredictor;
     uint32_t                    tickID = 0;
 
+    // P-6.3 benchmark: spread heroes across the map so FOW interest management
+    // filters entities from tick 1 (not just after a random-walk warm-up period).
+    // Distribution: uniform ±400 units — leaves a 100-unit margin from the edge.
+    std::mt19937                          spawnRng{std::random_device{}()};
+    std::uniform_real_distribution<float> spawnDist(-400.0f, 400.0f);
+
     manager.SetClientConnectedCallback(
-        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+        [&gameWorld, &kalmanPredictor, &spawnRng, &spawnDist](uint16_t id, const EndPoint& ep) {
+            const float sx = spawnDist(spawnRng);
+            const float sy = spawnDist(spawnRng);
             Logger::Log(LogLevel::Success, LogChannel::Core,
-                std::format("CLIENT CONNECTED   NetworkID={}  ep={}", id, ep.ToString()));
-            gameWorld.AddHero(id);
-            kalmanPredictor.AddEntity(id, 0.0f, 0.0f);
+                std::format("CLIENT CONNECTED   NetworkID={}  ep={}  spawn=({:.0f},{:.0f})",
+                    id, ep.ToString(), sx, sy));
+            gameWorld.AddHero(id, sx, sy);
+            kalmanPredictor.AddEntity(id, sx, sy);
         });
 
     manager.SetClientDisconnectedCallback(
-        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+        [&gameWorld, &kalmanPredictor, &visTracker](uint16_t id, const EndPoint& ep) {
             Logger::Log(LogLevel::Warning, LogChannel::Core,
                 std::format("CLIENT DISCONNECTED  NetworkID={}  ep={}", id, ep.ToString()));
             gameWorld.RemoveHero(id);
             kalmanPredictor.RemoveEntity(id);
+            visTracker.RemoveClient(id);  // P-6.3: clean up visibility state
         });
 
     // ── P-4.4 Job System ──────────────────────────────────────────────────────
@@ -171,6 +198,9 @@ int main(int argc, char* argv[]) {
 
     // ── P-5.4 Priority Evaluator ──────────────────────────────────────────────
     Brain::PriorityEvaluator priorityEvaluator;
+
+    // ── P-6.3 Visibility Tracker ──────────────────────────────────────────────
+    Core::VisibilityTracker visTracker;
 
     // ── P-5.3 Lag Compensation constants ─────────────────────────────────────
     static constexpr uint32_t kMaxRewindTicks  = 20;    // 200ms at 100Hz
@@ -203,6 +233,7 @@ int main(int argc, char* argv[]) {
     // eliminating the WSL2 syscall overhead that caused Scenario C's 39.5ms full loop.
     struct SnapshotTask {
         EndPoint                        ep;
+        uint16_t                        obsID  = 0;  // P-6.3: observer networkID for VisibilityTracker
         std::vector<Data::HeroState>    states;   // all visible entities for this observer
         std::vector<uint8_t>            buffer;   // output filled by the worker job
     };
@@ -405,7 +436,8 @@ int main(int argc, char* argv[]) {
                 const std::vector<uint8_t>& tiers = obsIt->second;
 
                 SnapshotTask task;
-                task.ep = ep;
+                task.ep    = ep;
+                task.obsID = obsID;
                 gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
                     if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
                     const auto idxIt = entityIdx.find(eid);
@@ -420,7 +452,30 @@ int main(int argc, char* argv[]) {
         // RecordEntitySnapshotsSent is now called inside CommitAndSendBatchSnapshot
         // so the count is always accurate regardless of code path.
 
-        if (!snapshots.empty()) {
+        // P-6.2: 30Hz snapshot rate — simulate at 100Hz, send every 3rd tick.
+        // Reduces bandwidth ~3x (100Hz → 30Hz out). Phase A+B are skipped on
+        // the other 2 ticks; the gather loop above still runs at 100Hz so FOW
+        // and LOD tier data remain fresh.
+        static constexpr int kSnapshotEveryNTicks = 3;
+        const bool sendThisTick = (tickID % kSnapshotEveryNTicks == 0);
+
+        if (!snapshots.empty() && sendThisTick) {
+            // P-6.3 — Re-entry baseline eviction (main thread, before Phase A).
+            // When an entity transitions invisible→visible for a client, its
+            // m_entityBaselines entry may be stale (ACK loss on the return path
+            // means the server's confirmed baseline lags the client's local copy).
+            // Evicting forces SerializeBatchSnapshotFor to emit a full state,
+            // guaranteeing the client resyncs correctly on re-entry.
+            for (auto& task : snapshots) {
+                std::vector<uint32_t> nowVisible;
+                nowVisible.reserve(task.states.size());
+                for (const auto& st : task.states)
+                    nowVisible.push_back(st.networkID);
+                const auto reentrants = visTracker.UpdateAndGetReentrants(task.obsID, nowVisible);
+                for (const uint32_t eid : reentrants)
+                    manager.EvictEntityBaseline(task.ep, eid);
+            }
+
             if (parallelMode) {
                 // Phase A — parallel serialization (one job per client, not per entity).
                 // The latch size is now O(clients), not O(clients × entities).
@@ -463,6 +518,12 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+
+        // P-6.2: Signal the async send thread (or flush synchronously on SFML).
+        // On Linux: returns immediately — sendmmsg runs off the game loop.
+        // On Windows / fallback: synchronous Flush() as before.
+        if (sendThisTick)
+            manager.FlushTransport();
 
         // 5. Advance tick counter
         ++tickID;
