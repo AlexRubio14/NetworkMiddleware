@@ -133,14 +133,18 @@ run_gauntlet_scenario() {
 
     sleep 2  # let server bind before bots connect
 
-    # Start bots
+    # Start bots — staggered 100ms apart to avoid handshake storm
     for ((i = 0; i < BOT_COUNT; i++)); do
         SERVER_HOST=127.0.0.1 SERVER_PORT=7777 \
             "$BOT_BIN" >> "$LOG_DIR/bot_${safe_label}_${i}.log" 2>&1 &
         BOT_PIDS+=($!)
+        sleep 0.1
     done
     ok "${BOT_COUNT} bots launched. Collecting for ${DURATION}s..."
 
+    # With 100ms stagger, bots take BOT_COUNT*0.1s to launch; add 8s for handshakes.
+    LAUNCH_WAIT=$(awk "BEGIN { printf \"%d\", int($BOT_COUNT * 0.1 + 8) }")
+    sleep "$LAUNCH_WAIT"
     sleep "$DURATION"
 
     # Stop bots first (so profiler snapshot reflects stable client count)
