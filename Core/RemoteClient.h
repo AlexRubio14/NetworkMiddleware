@@ -132,6 +132,11 @@ namespace NetworkMiddleware::Core {
         // nullptr → caller must fall back to a full sync (Serialize).
         const Shared::Data::HeroState* GetEntityBaseline(uint32_t entityID) const;
 
+        // P-6.3: Evicts the cached baseline for entityID so the next snapshot
+        // sends a full state.  Call when an entity transitions invisible→visible
+        // (FOW re-entry) to guarantee the client receives a correct full sync.
+        void EvictEntityBaseline(uint32_t entityID);
+
         // --- P-3.6 Session Recovery ---
 
         // Random token issued in ConnectionAccepted; required for reconnection.

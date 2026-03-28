@@ -1050,6 +1050,15 @@ namespace NetworkMiddleware::Core {
     }
 
     // -------------------------------------------------------------------------
+    // EvictEntityBaseline — P-6.3 Interest Management re-entry
+    // -------------------------------------------------------------------------
+    void NetworkManager::EvictEntityBaseline(const Shared::EndPoint& ep, uint32_t entityID) {
+        const auto it = m_establishedClients.find(ep);
+        if (it != m_establishedClients.end())
+            it->second.EvictEntityBaseline(entityID);
+    }
+
+    // -------------------------------------------------------------------------
     // GetClientTeamID — P-5.1 FOW interest management
     // -------------------------------------------------------------------------
     uint8_t NetworkManager::GetClientTeamID(const Shared::EndPoint& ep) const {

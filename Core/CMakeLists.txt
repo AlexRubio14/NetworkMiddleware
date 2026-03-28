@@ -19,6 +19,8 @@ add_library(MiddlewareCore STATIC
         JobSystem.cpp
         SpatialGrid.h
         SpatialGrid.cpp
+        VisibilityTracker.h
+        VisibilityTracker.cpp
         HitValidator.h
         HitValidator.cpp
 )

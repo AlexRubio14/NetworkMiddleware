@@ -58,6 +58,7 @@
 #include "../Core/AsyncSendDispatcher.h"
 #include "../Core/NetworkManager.h"
 #include "../Core/SpatialGrid.h"
+#include "../Core/VisibilityTracker.h"
 #include "../Shared/Log/Logger.h"
 #include "../Shared/Network/InputPackets.h"
 #include "../Shared/NetworkAddress.h"
@@ -160,11 +161,12 @@ int main(int argc, char* argv[]) {
         });
 
     manager.SetClientDisconnectedCallback(
-        [&gameWorld, &kalmanPredictor](uint16_t id, const EndPoint& ep) {
+        [&gameWorld, &kalmanPredictor, &visTracker](uint16_t id, const EndPoint& ep) {
             Logger::Log(LogLevel::Warning, LogChannel::Core,
                 std::format("CLIENT DISCONNECTED  NetworkID={}  ep={}", id, ep.ToString()));
             gameWorld.RemoveHero(id);
             kalmanPredictor.RemoveEntity(id);
+            visTracker.RemoveClient(id);  // P-6.3: clean up visibility state
         });
 
     // ── P-4.4 Job System ──────────────────────────────────────────────────────
@@ -186,6 +188,9 @@ int main(int argc, char* argv[]) {
 
     // ── P-5.4 Priority Evaluator ──────────────────────────────────────────────
     Brain::PriorityEvaluator priorityEvaluator;
+
+    // ── P-6.3 Visibility Tracker ──────────────────────────────────────────────
+    Core::VisibilityTracker visTracker;
 
     // ── P-5.3 Lag Compensation constants ─────────────────────────────────────
     static constexpr uint32_t kMaxRewindTicks  = 20;    // 200ms at 100Hz
@@ -218,6 +223,7 @@ int main(int argc, char* argv[]) {
     // eliminating the WSL2 syscall overhead that caused Scenario C's 39.5ms full loop.
     struct SnapshotTask {
         EndPoint                        ep;
+        uint16_t                        obsID  = 0;  // P-6.3: observer networkID for VisibilityTracker
         std::vector<Data::HeroState>    states;   // all visible entities for this observer
         std::vector<uint8_t>            buffer;   // output filled by the worker job
     };
@@ -420,7 +426,8 @@ int main(int argc, char* argv[]) {
                 const std::vector<uint8_t>& tiers = obsIt->second;
 
                 SnapshotTask task;
-                task.ep = ep;
+                task.ep    = ep;
+                task.obsID = obsID;
                 gameWorld.ForEachHero([&](uint32_t eid, const Data::HeroState& st) {
                     if (!spatialGrid.IsCellVisible(st.x, st.y, obsTeam)) return;
                     const auto idxIt = entityIdx.find(eid);
@@ -443,6 +450,22 @@ int main(int argc, char* argv[]) {
         const bool sendThisTick = (tickID % kSnapshotEveryNTicks == 0);
 
         if (!snapshots.empty() && sendThisTick) {
+            // P-6.3 — Re-entry baseline eviction (main thread, before Phase A).
+            // When an entity transitions invisible→visible for a client, its
+            // m_entityBaselines entry may be stale (ACK loss on the return path
+            // means the server's confirmed baseline lags the client's local copy).
+            // Evicting forces SerializeBatchSnapshotFor to emit a full state,
+            // guaranteeing the client resyncs correctly on re-entry.
+            for (auto& task : snapshots) {
+                std::vector<uint32_t> nowVisible;
+                nowVisible.reserve(task.states.size());
+                for (const auto& st : task.states)
+                    nowVisible.push_back(st.networkID);
+                const auto reentrants = visTracker.UpdateAndGetReentrants(task.obsID, nowVisible);
+                for (const uint32_t eid : reentrants)
+                    manager.EvictEntityBaseline(task.ep, eid);
+            }
+
             if (parallelMode) {
                 // Phase A — parallel serialization (one job per client, not per entity).
                 // The latch size is now O(clients), not O(clients × entities).

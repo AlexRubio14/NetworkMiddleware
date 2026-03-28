@@ -26,4 +26,8 @@ namespace NetworkMiddleware::Core {
         return (it != m_entityBaselines.end()) ? &it->second : nullptr;
     }
 
+    void RemoteClient::EvictEntityBaseline(uint32_t entityID) {
+        m_entityBaselines.erase(entityID);
+    }
+
 } // namespace NetworkMiddleware::Core

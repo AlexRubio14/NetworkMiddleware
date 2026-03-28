@@ -225,6 +225,11 @@ namespace NetworkMiddleware::Core {
         // No-op when using SFMLTransport or MockTransport.
         void FlushTransport();
 
+        // P-6.3: Evicts the delta baseline for entityID at client `ep`.
+        // Called from the game loop when VisibilityTracker detects a FOW re-entry.
+        // Forces the next SerializeBatchSnapshotFor to send a full state for that entity.
+        void EvictEntityBaseline(const Shared::EndPoint& ep, uint32_t entityID);
+
         // Returns the team ID of the established client at ep (0 or 1).
         // Returns 0 if the endpoint is not found (safe default for callers).
         uint8_t GetClientTeamID(const Shared::EndPoint& ep) const;

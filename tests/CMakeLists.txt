@@ -28,6 +28,8 @@ add_executable(MiddlewareTests
     Brain/KalmanTests.cpp
     Brain/PriorityEvaluatorTests.cpp
     Core/AsyncSendDispatcherTests.cpp
+    Core/VisibilityTrackerTests.cpp
+    Core/InterestManagementTests.cpp
 )
 
 # P-6.1: RawUDPTransport tests — Linux only (uses POSIX sockets, no SFML).
