@@ -1034,6 +1034,13 @@ namespace NetworkMiddleware::Core {
     }
 
     // -------------------------------------------------------------------------
+    // FlushTransport — P-6.1 sendmmsg batch dispatch
+    // -------------------------------------------------------------------------
+    void NetworkManager::FlushTransport() {
+        m_transport->Flush();
+    }
+
+    // -------------------------------------------------------------------------
     // GetClientTeamID — P-5.1 FOW interest management
     // -------------------------------------------------------------------------
     uint8_t NetworkManager::GetClientTeamID(const Shared::EndPoint& ep) const {

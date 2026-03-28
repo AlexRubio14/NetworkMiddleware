@@ -117,7 +117,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // P-6.1: Use native POSIX sockets on Linux (sendmmsg — 1 syscall per tick).
+    // Windows keeps SFML for local dev / CI.
+#ifdef __linux__
+    auto transport = TransportFactory::Create(TransportType::NATIVE_LINUX);
+#else
     auto transport = TransportFactory::Create(TransportType::SFML);
+#endif
     if (!transport->Initialize(port)) {
         Logger::Log(LogLevel::Error, LogChannel::Transport,
             std::format("Failed to bind UDP socket on port {} — aborting", port));
@@ -463,6 +469,10 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+
+        // P-6.1: Flush all queued sends via sendmmsg (1 syscall for all clients).
+        // No-op on SFML transport.
+        manager.FlushTransport();
 
         // 5. Advance tick counter
         ++tickID;

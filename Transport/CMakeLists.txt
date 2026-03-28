@@ -3,6 +3,8 @@ add_library(MiddlewareTransport STATIC
         SFMLTransport.h
         TransportFactory.h
         TransportFactory.cpp
+        RawUDPTransport.cpp
+        RawUDPTransport.h
 )
 
 target_link_libraries(MiddlewareTransport
