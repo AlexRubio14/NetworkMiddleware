@@ -449,6 +449,14 @@ cmake_install.cmake
 install_manifest.txt
 compile_commands.json
 
+# --- CLion / Rider build directories ---
+cmake-build*/
+
+# --- Compiled binaries & libraries (Linux) ---
+*.a
+*.so
+*.so.*
+
 # --- Unreal Engine ---
 Binaries/
 DerivedDataCache/

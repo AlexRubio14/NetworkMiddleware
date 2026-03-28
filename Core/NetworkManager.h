@@ -214,6 +214,11 @@ namespace NetworkMiddleware::Core {
             const std::vector<Shared::Data::HeroState>& states,
             const std::vector<uint8_t>& payload);
 
+        // P-6.1: Flush all pending outgoing packets via sendmmsg (RawUDPTransport).
+        // Call once per tick after Phase B (CommitAndSendBatchSnapshot loop).
+        // No-op when using SFMLTransport or MockTransport.
+        void FlushTransport();
+
         // Returns the team ID of the established client at ep (0 or 1).
         // Returns 0 if the endpoint is not found (safe default for callers).
         uint8_t GetClientTeamID(const Shared::EndPoint& ep) const;

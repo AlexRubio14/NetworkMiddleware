@@ -10,16 +10,23 @@
 param(
     [int]    $Count = 50,
     [string] $ServerHost = "127.0.0.1",
-    [int]    $ServerPort = 7777
+    [int]    $ServerPort = 7777,
+    [string] $BotPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$BotExe    = Join-Path $ScriptDir "HeadlessBot.exe"
+# Resolve HeadlessBot.exe: explicit param > current directory > script directory
+if ($BotPath -ne "" -and (Test-Path $BotPath)) {
+    $BotExe = $BotPath
+} elseif (Test-Path (Join-Path (Get-Location) "HeadlessBot.exe")) {
+    $BotExe = Join-Path (Get-Location) "HeadlessBot.exe"
+} else {
+    $BotExe = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "HeadlessBot.exe"
+}
 
 if (-not (Test-Path $BotExe)) {
-    Write-Error "HeadlessBot.exe not found at: $BotExe`nRun this script from the folder containing the executables."
+    Write-Error "HeadlessBot.exe not found.`nUse -BotPath 'C:\path\to\HeadlessBot.exe' to specify its location."
     exit 1
 }
 
