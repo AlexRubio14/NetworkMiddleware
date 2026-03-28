@@ -14,7 +14,9 @@
 // On Docker Desktop for Windows the flag is silently ignored and bridge
 // networking is used instead — change SERVER_HOST to the server container IP.
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <format>
 #include <random>
@@ -143,6 +145,38 @@ int main() {
         std::format("Established — NetworkID={}  token={:#018x}",
             bot.GetNetworkID(), bot.GetReconnectionToken()));
 
+    // ── Roam zone config (FOW benchmark support) ─────────────────────────────
+    // BOT_ROAM_RADIUS > 0: bot dead-reckons its position from the inputs it
+    // sends (server moves heroes at kMoveSpeed=100 u/s). When the estimated
+    // position exceeds zone_center ± roam_radius, the bot steers back toward
+    // the zone center instead of picking a random direction.  This keeps bots
+    // anchored to their spawn zone so the FOW benchmark can isolate the
+    // filtering effect (two groups far apart stay far apart).
+    //
+    //   BOT_ROAM_RADIUS    — max wander distance from zone center (0 = free, default)
+    //   BOT_ZONE_CENTER_X  — zone center X (default: 0)
+    //   BOT_ZONE_CENTER_Y  — zone center Y (default: 0)
+    const char* roamRadiusEnv = std::getenv("BOT_ROAM_RADIUS");
+    const char* zoneCxEnv     = std::getenv("BOT_ZONE_CENTER_X");
+    const char* zoneCyEnv     = std::getenv("BOT_ZONE_CENTER_Y");
+
+    const float roamRadius = roamRadiusEnv ? std::stof(roamRadiusEnv) : 0.0f;
+    const float zoneCx     = zoneCxEnv     ? std::stof(zoneCxEnv)     : 0.0f;
+    const float zoneCy     = zoneCyEnv     ? std::stof(zoneCyEnv)     : 0.0f;
+
+    // Dead-reckoned position — starts at zone center (approximate; the server
+    // assigns the actual spawn, but the bot can't know it until it receives a
+    // snapshot).  Error stays bounded because we correct toward zone center
+    // whenever the estimate drifts beyond roamRadius.
+    float estX = zoneCx;
+    float estY = zoneCy;
+
+    if (roamRadius > 0.0f) {
+        Logger::Log(LogLevel::Info, LogChannel::General,
+            std::format("Roam zone: center=({:.0f},{:.0f})  radius={:.0f}u",
+                zoneCx, zoneCy, roamRadius));
+    }
+
     // ── 60 Hz input loop — Chaos mode (P-4.3) ────────────────────────────────
     // Direction changes every 0.5s to maximize delta compression stress:
     // each direction flip produces a large delta vs the previous state,
@@ -151,22 +185,50 @@ int main() {
     std::uniform_real_distribution<float> dir(-1.0f, 1.0f);
     std::uniform_int_distribution<int>    btn(0, 0xFF);
 
-    constexpr auto kTickInterval   = std::chrono::microseconds(16'667);   // ~60 Hz
-    constexpr auto kChaosInterval  = std::chrono::milliseconds(500);      // flip every 0.5s
+    constexpr auto  kTickInterval  = std::chrono::microseconds(16'667);  // ~60 Hz
+    constexpr auto  kChaosInterval = std::chrono::milliseconds(500);     // flip every 0.5s
+    constexpr float kMoveSpeed     = 100.0f;                             // units/s (must match server)
+    constexpr float kDt            = 1.0f / 60.0f;                      // seconds per tick
+    constexpr float kMapBound      = 500.0f;
 
     float chaosDirX = dir(rng);
     float chaosDirY = dir(rng);
 
-    auto nextTick             = std::chrono::steady_clock::now();
-    auto nextDirectionChange  = nextTick + kChaosInterval;
+    auto nextTick            = std::chrono::steady_clock::now();
+    auto nextDirectionChange = nextTick + kChaosInterval;
 
     while (bot.GetState() == BotClient::State::Established) {
         const auto now = std::chrono::steady_clock::now();
 
-        // Chaos: pick a new random direction every 0.5s.
+        // ── Dead reckoning — update estimated position ────────────────────────
+        // Normalise the direction vector the same way the server does before
+        // multiplying by kMoveSpeed (zero-vector → no movement).
+        const float len = std::sqrt(chaosDirX * chaosDirX + chaosDirY * chaosDirY);
+        if (len > 0.0f) {
+            estX += (chaosDirX / len) * kMoveSpeed * kDt;
+            estY += (chaosDirY / len) * kMoveSpeed * kDt;
+            estX = std::clamp(estX, -kMapBound, kMapBound);
+            estY = std::clamp(estY, -kMapBound, kMapBound);
+        }
+
+        // ── Chaos: pick a new direction every 0.5s ────────────────────────────
         if (now >= nextDirectionChange) {
-            chaosDirX = dir(rng);
-            chaosDirY = dir(rng);
+            if (roamRadius > 0.0f) {
+                // If outside the roam radius, steer back toward zone center.
+                const float dx   = estX - zoneCx;
+                const float dy   = estY - zoneCy;
+                const float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > roamRadius) {
+                    chaosDirX = -dx / dist;
+                    chaosDirY = -dy / dist;
+                } else {
+                    chaosDirX = dir(rng);
+                    chaosDirY = dir(rng);
+                }
+            } else {
+                chaosDirX = dir(rng);
+                chaosDirY = dir(rng);
+            }
             nextDirectionChange = now + kChaosInterval;
         }
 
